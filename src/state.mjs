@@ -2,12 +2,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const HOME = process.env.BRIDGE_HOME || path.join(os.homedir(), '.bridge')
-export const TASKS_DIR = path.join(HOME, 'tasks')
+export const HOME = process.env.REMOTEHANDS_HOME || path.join(os.homedir(), '.remotehands')
+export const LOGS_DIR = path.join(HOME, 'logs')
+export const SOCKET = path.join(HOME, 'daemon.sock')
+export const PID_FILE = path.join(HOME, 'daemon.pid')
+export const DAEMON_LOG = path.join(HOME, 'daemon.log')
 const SESSIONS_FILE = path.join(HOME, 'sessions.json')
 
-function ensure() {
-  fs.mkdirSync(TASKS_DIR, { recursive: true })
+export const DEFAULT_MODEL = process.env.REMOTEHANDS_MODEL || 'sonnet'
+export const CLAUDE_BIN = process.env.REMOTEHANDS_CLAUDE_BIN || 'claude'
+
+export function ensureDirs() {
+  fs.mkdirSync(LOGS_DIR, { recursive: true })
 }
 
 function readJson(file, fallback) {
@@ -18,59 +24,48 @@ function readJson(file, fallback) {
   }
 }
 
-function writeJson(file, value) {
-  ensure()
-  fs.writeFileSync(file, JSON.stringify(value, null, 2))
-}
-
-/** Sessions are keyed by the absolute working directory they operate on. */
+/**
+ * Session ids are remembered per directory, so a daemon restart resumes the same
+ * conversation instead of starting a stranger.
+ */
 export function readSessions() {
   return readJson(SESSIONS_FILE, {})
 }
 
-export function getSession(cwd) {
-  return readSessions()[cwd] || null
-}
-
-export function saveSession(cwd, session) {
+export function rememberSession(cwd, record) {
+  ensureDirs()
   const all = readSessions()
-  all[cwd] = session
-  writeJson(SESSIONS_FILE, all)
+  all[cwd] = { ...all[cwd], ...record, updatedAt: Date.now() }
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(all, null, 2))
 }
 
-export function clearSession(cwd) {
+export function forgetSession(cwd) {
   const all = readSessions()
   delete all[cwd]
-  writeJson(SESSIONS_FILE, all)
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(all, null, 2))
 }
 
-export const taskFile = (id) => path.join(TASKS_DIR, `${id}.json`)
-export const logFile = (id) => path.join(TASKS_DIR, `${id}.log`)
-export const errFile = (id) => path.join(TASKS_DIR, `${id}.err`)
+export const eventLogFile = (sessionId) => path.join(LOGS_DIR, `${sessionId}.jsonl`)
 
-export function saveTask(task) {
-  writeJson(taskFile(task.id), task)
-  return task
+export function isAlive(pid) {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
-export function readTaskRecord(id) {
-  return readJson(taskFile(id), null)
+export function daemonPid() {
+  const pid = Number(readJson(PID_FILE, null) ?? NaN)
+  return isAlive(pid) ? pid : null
 }
 
-export function listTaskRecords({ cwd, limit = 20 } = {}) {
-  ensure()
-  return fs
-    .readdirSync(TASKS_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => readJson(path.join(TASKS_DIR, f), null))
-    .filter(Boolean)
-    .filter((t) => (cwd ? t.cwd === cwd : true))
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit)
+export function resolveCwd(cwd) {
+  const abs = path.resolve(cwd || process.cwd())
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+    throw new Error(`cwd does not exist or is not a directory: ${abs}`)
+  }
+  return abs
 }
-
-export function newTaskId() {
-  return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-}
-
-export { ensure as ensureStateDirs }

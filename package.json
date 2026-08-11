@@ -1,16 +1,24 @@
 {
-  "name": "codex-claude-bridge",
+  "name": "remotehands",
   "version": "0.1.0",
-  "description": "Let Codex supervise Claude Code: an MCP server + CLI that drives a persistent Claude Code session as a delegated implementer.",
+  "description": "Your agent's hands on someone else's keyboard — drive a live Claude Code session from Codex over MCP.",
   "type": "module",
   "bin": {
-    "bridge": "./bin/bridge.mjs"
+    "remotehands": "./bin/remotehands.mjs"
   },
   "files": [
     "bin",
     "src",
     "README.md"
   ],
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "codex",
+    "agent",
+    "orchestration"
+  ],
+  "license": "MIT",
   "engines": {
     "node": ">=18"
   },
