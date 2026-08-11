@@ -1,62 +1,51 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import {
-  DEFAULT_MODEL,
-  cancelTask,
-  diff,
-  inspectTask,
-  listTaskRecords,
-  resetSession,
-  sessionInfo,
-  startTask,
-} from './runner.mjs'
-import { formatDiff, formatSession, formatStatus, formatTasks } from './format.mjs'
+import { request } from './client.mjs'
+import { DEFAULT_MODEL } from './state.mjs'
+import { formatDiff, formatEvents, formatInfo, formatList } from './format.mjs'
+import { diff } from './git.mjs'
 
 const text = (t) => ({ content: [{ type: 'text', text: t }] })
 const fail = (e) => ({ content: [{ type: 'text', text: `error: ${e.message}` }], isError: true })
 
 export function createServer() {
-  const server = new McpServer({ name: 'claude-bridge', version: '0.1.0' })
+  const server = new McpServer({ name: 'remotehands', version: '0.1.0' })
 
   server.registerTool(
-    'implement',
+    'send',
     {
-      title: 'Delegate a task to Claude Code',
+      title: 'Type a message into the live Claude Code session',
       description:
-        'Send an instruction to the persistent Claude Code session for a directory, exactly as a user would type it into Claude Code. ' +
-        'Claude keeps full context across calls, so follow-ups can be short ("now handle the empty-input case"). ' +
-        'Returns immediately with a task_id — poll status() to watch progress and collect the result. ' +
-        'One turn at a time per directory: wait for the current task to finish before sending the next.',
+        'You are the user of a live Claude Code session. This types a message into it, exactly as a person would. ' +
+        'Returns immediately — it never waits for Claude to finish.\n\n' +
+        'You can send at ANY time, including while Claude is mid-task: the message is queued, and Claude picks it ' +
+        'up between steps without stopping or losing context. That is how you steer work in flight ' +
+        '("actually, use the existing retry helper instead").\n\n' +
+        'The session is persistent, so keep messages short and conversational — Claude remembers everything ' +
+        'said before. After sending, use read() to watch what happens.\n\n' +
+        'Keep only one unanswered message in flight at a time; queue depth is best-effort and not durable.',
       inputSchema: {
-        cwd: z.string().describe('Absolute path to the repository or directory to work in.'),
-        task: z
-          .string()
-          .describe(
-            'The instruction for Claude. Be specific about intent and acceptance criteria; ' +
-              'Claude already remembers earlier turns in this session.',
-          ),
+        cwd: z.string().describe('Absolute path to the directory the session works in.'),
+        message: z.string().describe('What to say to Claude.'),
         model: z
           .string()
           .optional()
-          .describe(`Model alias for the implementer. Default: ${DEFAULT_MODEL}.`),
-        new_session: z
+          .describe(`Model, only used when starting a new session. Default: ${DEFAULT_MODEL}.`),
+        fresh: z
           .boolean()
           .optional()
-          .describe('Start a fresh session, discarding prior context for this directory.'),
+          .describe('Abandon the existing conversation and start a brand-new session.'),
       },
     },
-    async ({ cwd, task, model, new_session }) => {
+    async ({ cwd, message, model, fresh }) => {
       try {
-        const t = startTask({ cwd, prompt: task, model, newSession: new_session })
+        const snap = await request('send', { cwd, message, model, fresh })
+        const note = snap.queued
+          ? 'Queued while Claude was mid-task — it will pick this up between steps.'
+          : 'Delivered; Claude is starting on it.'
         return text(
-          [
-            `started task ${t.id}`,
-            `session ${t.sessionId}${t.resumed ? ' (resumed)' : ' (new)'} · model ${t.model}`,
-            `cwd ${t.cwd}`,
-            '',
-            `Poll with status({ task_id: "${t.id}" }) — a real task takes minutes, so check in ~30s.`,
-          ].join('\n'),
+          `${note}\nsession ${snap.sessionId} · ${snap.status}\nRead from cursor ${snap.cursorBefore} to watch.`,
         )
       } catch (e) {
         return fail(e)
@@ -65,38 +54,97 @@ export function createServer() {
   )
 
   server.registerTool(
-    'status',
+    'read',
     {
-      title: 'Check a delegated task',
+      title: 'Watch the session',
       description:
-        'Progress or final result for a task: what Claude is doing right now, which files it has written, ' +
-        'and its closing message once finished. Call repeatedly while status is "running".',
+        'Everything that happened in the session since a cursor: what Claude said, each tool it ran, files it ' +
+        'wrote, failures, and turn completions. Returns a new cursor — pass it next time to get only what is new.\n\n' +
+        'Start with since=0 to see the whole session. Poll this while Claude is working, and tell the user what ' +
+        'you see. If Claude is heading the wrong way, send() a correction immediately rather than waiting.',
       inputSchema: {
-        task_id: z.string().describe('The id returned by implement().'),
-        full: z
-          .boolean()
+        cwd: z.string(),
+        since: z
+          .number()
+          .int()
+          .min(0)
           .optional()
-          .describe("Include Claude's final message even while the task is still running."),
+          .describe('Cursor from the previous read. Omit or 0 for the full session.'),
       },
     },
-    async ({ task_id, full }) => {
-      const snap = inspectTask(task_id)
-      if (!snap) return fail(new Error(`unknown task_id: ${task_id}`))
-      return text(formatStatus(snap, { full }))
+    async ({ cwd, since }) => {
+      try {
+        return text(formatEvents(await request('read', { cwd, since: since || 0 })))
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
+    'session',
+    {
+      title: 'Session status',
+      description:
+        'Whether a live session exists for a directory, its id, how long it has been alive, and what it has ' +
+        'written. Sessions survive you restarting — a remembered session resumes on the next send().',
+      inputSchema: { cwd: z.string() },
+    },
+    async ({ cwd }) => {
+      try {
+        return text(formatInfo(await request('info', { cwd })))
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
+    'sessions',
+    {
+      title: 'List all sessions',
+      description: 'Every live session across directories, plus remembered ones that will resume on next use.',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return text(formatList(await request('list', {})))
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
+    'end',
+    {
+      title: 'Close the session',
+      description:
+        'Shut the live Claude process down cleanly. Files it wrote stay on disk, and the conversation is ' +
+        'remembered — the next send() resumes it. Use this to stop a session that has gone badly wrong.',
+      inputSchema: { cwd: z.string() },
+    },
+    async ({ cwd }) => {
+      try {
+        const r = await request('end', { cwd })
+        return text(r.ended ? `session ended for ${r.cwd}` : `no live session for ${r.cwd}`)
+      } catch (e) {
+        return fail(e)
+      }
     },
   )
 
   server.registerTool(
     'diff',
     {
-      title: 'Review the working-tree diff',
+      title: 'Review the working tree',
       description:
-        'Git diff of the working tree against HEAD, plus untracked files. Use this to review what the ' +
-        'implementer actually changed before accepting it or sending corrections.',
+        'Git diff vs HEAD plus untracked files. Use this to review what actually landed on disk before ' +
+        'accepting the work or sending a correction.',
       inputSchema: {
-        cwd: z.string().describe('Absolute path to the repository.'),
-        stat: z.boolean().optional().describe('Summary only (--stat) instead of the full patch.'),
-        path: z.string().optional().describe('Limit the diff to a pathspec.'),
+        cwd: z.string(),
+        stat: z.boolean().optional().describe('Summary only instead of the full patch.'),
+        path: z.string().optional().describe('Limit to a pathspec.'),
       },
     },
     async ({ cwd, stat, path }) => {
@@ -108,66 +156,9 @@ export function createServer() {
     },
   )
 
-  server.registerTool(
-    'cancel',
-    {
-      title: 'Stop a running task',
-      description:
-        'Terminate a running delegated task. The session survives — edits already written stay on disk.',
-      inputSchema: { task_id: z.string() },
-    },
-    async ({ task_id }) => {
-      try {
-        const t = cancelTask(task_id)
-        return text(t.cancelled ? `cancelled ${t.id}` : `task ${t.id} was already ${t.status}`)
-      } catch (e) {
-        return fail(e)
-      }
-    },
-  )
-
-  server.registerTool(
-    'session',
-    {
-      title: 'Inspect or reset the implementer session',
-      description:
-        'Show the Claude session bound to a directory (its id, turn count, recent tasks), or reset it ' +
-        'so the next implement() starts from a clean slate.',
-      inputSchema: {
-        cwd: z.string(),
-        reset: z.boolean().optional().describe('Forget the session for this directory.'),
-      },
-    },
-    async ({ cwd, reset }) => {
-      try {
-        if (reset) {
-          const r = resetSession(cwd)
-          return text(`session cleared for ${r.cwd} — next implement() starts fresh.`)
-        }
-        return text(formatSession(sessionInfo(cwd)))
-      } catch (e) {
-        return fail(e)
-      }
-    },
-  )
-
-  server.registerTool(
-    'tasks',
-    {
-      title: 'List recent tasks',
-      description: 'Recent delegated tasks with their status, newest first.',
-      inputSchema: {
-        cwd: z.string().optional().describe('Filter to one directory.'),
-        limit: z.number().int().min(1).max(100).optional(),
-      },
-    },
-    async ({ cwd, limit }) => text(formatTasks(listTaskRecords({ cwd, limit: limit || 20 }))),
-  )
-
   return server
 }
 
 export async function runStdioServer() {
-  const server = createServer()
-  await server.connect(new StdioServerTransport())
+  await createServer().connect(new StdioServerTransport())
 }

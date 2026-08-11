@@ -1,162 +1,183 @@
-# codex-claude-bridge
+# remotehands
 
-Let **Codex** supervise **Claude Code**.
+**Your agent's hands on someone else's keyboard.**
 
-Codex plans and reviews. Claude Code implements. You only ever look at Codex.
+Codex doesn't submit jobs to Claude Code. Codex *uses* Claude Code — typing into
+a live session, watching it work, cutting in mid-task when it drifts, and
+carrying on. Exactly what a person does, except the person is an agent.
 
 ```
-   you  ──▶  Codex (supervisor)  ──MCP──▶  bridge  ──▶  Claude Code (implementer, sonnet)
-                    ▲                                          │
-                    └────────── progress · diffs · results ─────┘
+   you  ──▶  Codex  ──MCP──▶  remotehands daemon  ──▶  live Claude Code session
+                 ▲                                             │
+                 └────────── everything it says and does ───────┘
 ```
 
-Codex gets six tools. It sends an instruction to Claude exactly as a user would
-type it, watches the work land, reads the diff, and sends corrections — all
-without you leaving the Codex TUI.
+You watch Codex. Codex watches Claude.
 
-## Why
+## Why this is different
 
-Codex is good at planning and reviewing. Claude Code is good at grinding through
-implementation. This wires the first to the second, so the expensive reasoning
-happens once, at the top, and the cheap model does the typing.
+Every other Codex↔Claude bridge does **task delegation**: send a task, wait,
+collect a result. Each turn is a fresh process; the supervisor is a dispatcher
+standing outside the room.
 
-The key detail: **it's one persistent Claude session per directory.** Turn one is
-a full brief, turn five is "now handle the empty-input case" — Claude still
-remembers everything. That's what makes Codex feel like it's driving a session
-rather than firing off disconnected one-shot jobs.
+`remotehands` keeps **one Claude process alive** with its stdin held open. That
+single fact changes what's possible:
+
+|  | task delegation | remotehands |
+| --- | --- | --- |
+| process | one per task, dies after | one live session, stays open |
+| mid-task message | impossible — must kill and restart | **queued, absorbed between steps** |
+| context | replayed from history each time | never left |
+| supervisor is | a dispatcher | **the user of the session** |
+
+### Steering work in flight
+
+This is the whole point. Codex sends a correction *while Claude is working* —
+nothing is interrupted, nothing restarts:
+
+```
+you › Create red/green/blue/gold.txt, each containing COLD.
+  · Write red.txt
+you › Change of plan — files not yet written must contain WARM.   [queued mid-task]
+  · Read red.txt
+claude: Got it — red.txt stays COLD (already written), the remaining three will be WARM.
+  · Write green.txt
+```
+
+Result: `red.txt: COLD`, the rest `WARM`. Claude finished its current step, took
+the new instruction on board, and kept going — no lost context, no restart.
 
 ## Install
 
 ```bash
-npm install -g codex-claude-bridge
-bridge init-codex          # registers the MCP server in ~/.codex/config.toml
+npm install -g remotehands
+remotehands init-codex
 ```
 
-Requires the [Claude Code](https://claude.com/claude-code) CLI (`claude`) on your
-PATH and logged in, plus the [Codex CLI](https://github.com/openai/codex).
+Needs the [Claude Code](https://claude.com/claude-code) CLI on your PATH and
+logged in, plus the [Codex CLI](https://github.com/openai/codex).
 
-`init-codex` appends this to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.claude]
-command = "bridge"
-args = ["mcp"]
-startup_timeout_sec = 30
-tool_timeout_sec = 120
-```
-
-## The tools Codex sees
+## The tools Codex gets
 
 | Tool | What it does |
 | --- | --- |
-| `implement(cwd, task, model?, new_session?)` | Send an instruction to the persistent Claude session. Returns a `task_id` immediately. |
-| `status(task_id, full?)` | Live progress — current tool, files written — then the final result. |
-| `diff(cwd, stat?, path?)` | Working-tree diff vs HEAD plus untracked files, for review. |
-| `cancel(task_id)` | Stop a running task. Edits already on disk stay. |
-| `session(cwd, reset?)` | Inspect the bound session, or reset it for a clean slate. |
-| `tasks(cwd?, limit?)` | Recent tasks, newest first. |
+| `send(cwd, message, model?, fresh?)` | Type into the live session. Returns instantly. Accepted **any time**, including mid-task — then it's queued. |
+| `read(cwd, since?)` | Everything since a cursor: Claude's words, every tool call, files written, failures, turn completions. Returns a new cursor. |
+| `session(cwd)` | Is a session live, how long, what has it written. |
+| `sessions()` | Every session across every directory. |
+| `end(cwd)` | Close the session cleanly. The conversation is remembered and resumes on next `send`. |
+| `diff(cwd, stat?, path?)` | Working-tree diff vs HEAD — how Codex reviews what actually landed. |
 
-Delegation is **asynchronous**: `implement` returns in milliseconds, and Codex
-polls `status` while Claude works. A twenty-minute task never trips a tool
-timeout, and Codex can narrate progress to you as it goes.
+`send` and `read` are the loop. Everything else is occasional.
 
-Only **one turn at a time per directory** — a session can't take two
-simultaneous turns, so a second `implement` on a busy directory is rejected with
-a clear message rather than corrupting the conversation.
+## The daemon
 
-## Teaching Codex to supervise
+Sessions live in a background daemon, not inside the MCP server — because Codex
+kills its MCP subprocess on exit, and a session that dies with your terminal
+isn't a session you can come back to.
 
-The tools alone don't make Codex behave like a supervisor. Add this to
-`~/.codex/AGENTS.md` (or a project `AGENTS.md`):
+So: **quit Codex, reopen it, and Claude is still there** — still mid-task, queue
+intact, full context. Verified by killing the MCP server mid-task and attaching a
+new one; the queued correction was still picked up and applied.
+
+The daemon starts automatically on first use.
+
+```bash
+remotehands status    # is it running?
+remotehands stop      # stop it and all sessions
+```
+
+If the daemon does die, nothing is lost permanently — session ids are persisted,
+and the next `send` resumes the same conversation.
+
+## Teaching Codex to drive
+
+Put this in `~/.codex/AGENTS.md`:
 
 ```markdown
-## Delegating implementation to Claude Code
+## Driving Claude Code
 
-You are the supervisor. You plan, delegate, review, and correct. You do not
-write implementation code yourself — the `claude` MCP server does that.
+You are the user of a live Claude Code session, not a dispatcher. You plan,
+type, watch, correct, and review. You do not write implementation code
+yourself.
 
 Loop:
-1. Plan the change and state the acceptance criteria.
-2. `implement({ cwd, task })` with a specific, self-contained instruction.
-3. Poll `status({ task_id })` until it is no longer running. Tell me what it's
-   doing while you wait.
-4. `diff({ cwd })` and actually review the change against your criteria.
-5. If it's wrong, `implement()` a correction — keep it short, the session
-   remembers the earlier turns.
-6. Report the finished change to me with what you verified.
+1. Plan the change and state your acceptance criteria.
+2. send({ cwd, message }) — brief it like a capable engineer.
+3. read({ cwd, since }) repeatedly while it works. Narrate what you see to me.
+4. The moment it looks wrong, send() a correction. Do NOT wait for the turn to
+   end — the message queues and Claude picks it up between steps.
+5. When idle, diff({ cwd }) and review against your criteria.
+6. Correct with another short send(), or report the finished work to me.
 
-Write the task like you're briefing a capable engineer: intent, constraints,
-and how you'll judge it. Don't restate context from earlier turns in the same
-session — Claude still has it.
+The session remembers everything. Keep messages short and conversational —
+never restate earlier context. Keep one unanswered message in flight at a time.
 ```
 
 ## CLI
 
-The same engine, driven by hand. Useful for debugging, or firing off a
-delegation outside Codex.
+The same engine by hand.
 
 ```bash
-bridge send "add retry with backoff to the fetcher"   # delegate and follow live
-bridge send "now add tests" --model opus              # same session, different model
-bridge status t1abc2def                               # progress or result
-bridge session                                        # session id, turns, recent tasks
-bridge session --reset                                # start fresh next time
-bridge diff --stat                                    # review
-bridge tasks                                          # history
-bridge cancel t1abc2def
+remotehands send "add retry with backoff to the fetcher"   # send, then watch
+remotehands send "actually use the existing helper"        # works mid-task too
+remotehands watch                                          # follow the live session
+remotehands read --since 42                                # replay from a cursor
+remotehands session                                        # status
+remotehands diff --stat                                    # review
+remotehands end                                            # close the session
 ```
 
-Flags: `--cwd <dir>`, `--model <name>`, `--new`, `--detach`, `--stat`,
-`--reset`, `--full`.
+Flags: `--cwd <dir>`, `--model <name>`, `--fresh`, `--since <n>`, `--stat`,
+`--no-follow`.
 
-Because the bridge owns the session UUID, you can always attach to the exact
-session Codex has been driving:
+You can always attach to the exact session Codex is driving:
 
 ```bash
-claude --resume $(bridge session | awk '/^session/{print $2}')
+claude --resume $(remotehands session | awk '/^session/{print $2}')
 ```
 
 ## Autonomy
 
-The implementer runs with `--dangerously-skip-permissions` in your actual
-working copy — it writes files, runs tests, installs dependencies, with no
-prompts. That's deliberate: a headless session has nobody to answer a permission
-dialog, and the whole point is hands-off delegation.
+Claude runs with `--dangerously-skip-permissions` in your real working copy — it
+writes, runs tests, installs things, without prompting. Headless sessions have
+nobody to answer a permission dialog, and the point is hands-off delegation.
 
-Your guardrail is Codex's review plus git. Work on a branch. If you want harder
-isolation, point `cwd` at a `git worktree`.
+Your guardrails are Codex watching in real time, the ability to correct mid-task,
+and git. Work on a branch.
+
+## Known limits
+
+- **The queue is in-memory.** If the Claude process dies, queued messages are
+  gone silently. Keep one unanswered message in flight — the daemon reports
+  queue depth as best-effort, not a guarantee. See
+  [anthropics/claude-code#78338](https://github.com/anthropics/claude-code/issues/78338).
+- **No mid-turn interrupt.** `send` always queues and never cuts Claude off
+  (deliberate). To stop something badly wrong, `end` the session — the
+  conversation resumes on the next `send`.
+- **One session per directory.** Two sessions in one working copy would fight
+  over the same files.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `BRIDGE_MODEL` | `sonnet` | Default implementer model. |
-| `BRIDGE_CLAUDE_BIN` | `claude` | Path to the Claude Code binary. |
-| `BRIDGE_HOME` | `~/.bridge` | Where sessions, task records, and logs live. |
-
-State layout:
-
-```
-~/.bridge/
-  sessions.json      cwd -> { sessionId, turns, ... }
-  tasks/<id>.json    task record
-  tasks/<id>.log     raw stream-json from Claude Code
-  tasks/<id>.err     stderr
-```
-
-Tasks are spawned **detached** with output redirected to those logs, so status
-is read from disk. A delegated task survives Codex restarting, and the CLI and
-the MCP server see exactly the same state.
+| `REMOTEHANDS_MODEL` | `sonnet` | Model for new sessions. |
+| `REMOTEHANDS_CLAUDE_BIN` | `claude` | Path to the Claude Code binary. |
+| `REMOTEHANDS_HOME` | `~/.remotehands` | Sessions, event logs, daemon socket. |
 
 ## How it works
 
-1. `implement` resolves the directory to a session. First turn mints a UUID and
-   passes `--session-id`; every later turn passes `--resume <uuid>`.
-2. It spawns `claude -p <task> --model sonnet --output-format stream-json
-   --verbose --dangerously-skip-permissions`, detached, logging to disk.
-3. `status` parses that stream-json log into a snapshot: assistant text, tool
-   calls, files written, cost, and the final result — plus a liveness check on
-   the pid so a crashed run surfaces as an error instead of hanging forever.
+1. `send` asks the daemon for the session bound to that directory, starting one
+   if needed — `claude -p --input-format stream-json --output-format stream-json
+   --verbose --dangerously-skip-permissions`, stdin held open.
+2. Your message is written to that stdin as a JSON user message. Claude takes it
+   whenever it reaches a step boundary.
+3. Claude's stream-json output is parsed into numbered events (text, thinking,
+   tool calls, failures, results) kept in memory and appended to
+   `~/.remotehands/logs/<session>.jsonl`.
+4. `read` returns events after your cursor, so Codex polls cheaply and only ever
+   sees what's new.
 
 ## License
 
