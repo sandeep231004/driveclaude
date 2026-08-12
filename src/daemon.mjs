@@ -15,6 +15,9 @@ import { Session } from './session.mjs'
 /** cwd -> Session. The daemon outlives Codex, so these stay alive between runs. */
 const sessions = new Map()
 
+/** Set once the server is listening, so every exit path clears the same files. */
+let removeRuntimeFiles = () => {}
+
 function ensureSession(cwd, { model, fresh = false } = {}) {
   const existing = sessions.get(cwd)
   if (existing && existing.status !== 'exited') return existing
@@ -77,7 +80,12 @@ const ops = {
 
   shutdown: () => {
     for (const s of sessions.values()) s.end()
-    setTimeout(() => process.exit(0), 200).unref()
+    // Clear the socket and pid file too, or the next start finds a stale socket
+    // and every client wastes a connect attempt on a daemon that is long gone.
+    setTimeout(() => {
+      removeRuntimeFiles()
+      process.exit(0)
+    }, 200)
     return { stopping: true }
   },
 }
@@ -110,11 +118,28 @@ function handle(socket) {
   socket.on('error', () => {})
 }
 
-export function startDaemon() {
+/** Is something actually listening, or is this a socket a crashed daemon left behind? */
+function socketAlive() {
+  return new Promise((resolve) => {
+    const probe = net.createConnection(SOCKET)
+    probe.on('connect', () => {
+      probe.destroy()
+      resolve(true)
+    })
+    probe.on('error', () => resolve(false))
+  })
+}
+
+export async function startDaemon() {
   ensureDirs()
 
-  // Clear a socket left behind by a crashed daemon.
   if (fs.existsSync(SOCKET)) {
+    // Never hijack a healthy daemon: taking its address would strand its live
+    // sessions as unreachable orphans. Only clear a dead socket.
+    if (await socketAlive()) {
+      process.stdout.write('a daemon is already running — nothing to do\n')
+      return null
+    }
     try {
       fs.unlinkSync(SOCKET)
     } catch {}
@@ -123,20 +148,24 @@ export function startDaemon() {
   const server = net.createServer(handle)
   server.listen(SOCKET, () => {
     fs.writeFileSync(PID_FILE, String(process.pid))
-    process.stdout.write(`remotehands daemon listening on ${SOCKET} (pid ${process.pid})\n`)
+    process.stdout.write(`driveclaude daemon listening on ${SOCKET} (pid ${process.pid})\n`)
   })
 
-  const shutdown = () => {
-    for (const s of sessions.values()) s.end()
-    try {
-      server.close()
-    } catch {}
+  removeRuntimeFiles = () => {
     try {
       fs.unlinkSync(SOCKET)
     } catch {}
     try {
       fs.unlinkSync(PID_FILE)
     } catch {}
+  }
+
+  const shutdown = () => {
+    for (const s of sessions.values()) s.end()
+    try {
+      server.close()
+    } catch {}
+    removeRuntimeFiles()
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)

@@ -79,6 +79,13 @@ export class Session {
       for (const line of lines) if (line.trim()) this._onMessage(line)
     })
     this.child.stderr.on('data', (d) => this._push('error', { text: preview(String(d)) }))
+    // A Claude process that dies mid-write makes stdin emit EPIPE. Unhandled, that
+    // is fatal to the whole daemon — every other live session would die with it.
+    this.child.stdin.on('error', (e) => {
+      this.busy = false
+      this.status = 'exited'
+      this._push('error', { text: `lost the session while writing: ${e.code || e.message}` })
+    })
     this.child.on('exit', (code, signal) => {
       this.status = 'exited'
       this.busy = false

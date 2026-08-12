@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { DAEMON_LOG, SOCKET, ensureDirs } from './state.mjs'
 
-const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'remotehands.mjs')
+const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'driveclaude.mjs')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function once(op, args) {
@@ -17,12 +17,14 @@ function once(op, args) {
     socket.on('connect', () => socket.write(`${JSON.stringify({ id, op, args })}\n`))
     socket.on('data', (d) => {
       buf += d
-      const line = buf.split('\n')[0]
-      if (!line) return
+      // A reply can span many chunks — a busy session's `read` is far larger
+      // than one socket read. Wait for the terminating newline before parsing.
+      const nl = buf.indexOf('\n')
+      if (nl === -1) return
       socket.end()
       let res
       try {
-        res = JSON.parse(line)
+        res = JSON.parse(buf.slice(0, nl))
       } catch {
         return reject(new Error('malformed response from daemon'))
       }
