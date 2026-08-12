@@ -70,3 +70,22 @@ export function resolveCwd(cwd) {
   }
   return abs
 }
+
+const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json')
+
+/**
+ * --dangerously-skip-permissions means a spawned session never shows the
+ * interactive trust dialog, so the project never gets marked trusted. Left
+ * unfixed, a human later running plain `claude` in that directory hits the
+ * trust prompt before the session picker, which stalls "discover my session"
+ * behind a dialog instead of an unmarked but reachable-by-uuid session.
+ */
+export function trustProject(cwd) {
+  const config = readJson(CLAUDE_CONFIG, null)
+  if (!config) return
+  config.projects ||= {}
+  config.projects[cwd] = { ...config.projects[cwd], hasTrustDialogAccepted: true }
+  try {
+    fs.writeFileSync(CLAUDE_CONFIG, JSON.stringify(config))
+  } catch {}
+}
