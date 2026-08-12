@@ -6,6 +6,9 @@
   "bin": {
     "driveclaude": "bin/driveclaude.mjs"
   },
+  "scripts": {
+    "test": "node test/trust-project.test.mjs"
+  },
   "files": [
     "bin",
     "src",
