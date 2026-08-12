@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { CLAUDE_BIN, DEFAULT_MODEL, ensureDirs, eventLogFile } from './state.mjs'
+import { CLAUDE_BIN, DEFAULT_MODEL, ensureDirs, eventLogFile, trustProject } from './state.mjs'
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const MAX_EVENTS = 5000
@@ -52,6 +52,7 @@ export class Session {
 
   start() {
     ensureDirs()
+    trustProject(this.cwd)
     const args = [
       '-p',
       '--input-format',
