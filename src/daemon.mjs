@@ -20,7 +20,13 @@ let removeRuntimeFiles = () => {}
 
 function ensureSession(cwd, { model, fresh = false } = {}) {
   const existing = sessions.get(cwd)
-  if (existing && existing.status !== 'exited') return existing
+  if (existing && existing.status !== 'exited') {
+    if (!fresh) return existing
+    // fresh must win even over a live session — end it and drop it so the
+    // code below builds a genuinely new one instead of handing this back.
+    existing.end()
+    sessions.delete(cwd)
+  }
 
   if (fresh) forgetSession(cwd)
   const remembered = fresh ? null : readSessions()[cwd]

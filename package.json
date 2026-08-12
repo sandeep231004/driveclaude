@@ -7,7 +7,7 @@
     "driveclaude": "bin/driveclaude.mjs"
   },
   "scripts": {
-    "test": "node test/trust-project.test.mjs"
+    "test": "node test/trust-project.test.mjs && node test/fresh-session.test.mjs"
   },
   "files": [
     "bin",
