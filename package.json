@@ -13,12 +13,25 @@
   ],
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "claude-code",
     "codex",
     "agent",
-    "orchestration"
+    "agents",
+    "multi-agent",
+    "orchestration",
+    "cli"
   ],
+  "author": "sandeep231004",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandeep231004/remotehands.git"
+  },
+  "homepage": "https://github.com/sandeep231004/remotehands#readme",
+  "bugs": {
+    "url": "https://github.com/sandeep231004/remotehands/issues"
+  },
   "engines": {
     "node": ">=18"
   },
