@@ -10,7 +10,7 @@ const text = (t) => ({ content: [{ type: 'text', text: t }] })
 const fail = (e) => ({ content: [{ type: 'text', text: `error: ${e.message}` }], isError: true })
 
 export function createServer() {
-  const server = new McpServer({ name: 'remotehands', version: '0.1.0' })
+  const server = new McpServer({ name: 'driveclaude', version: '0.1.0' })
 
   server.registerTool(
     'send',

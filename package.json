@@ -1,10 +1,10 @@
 {
-  "name": "remotehands",
+  "name": "driveclaude",
   "version": "0.1.0",
-  "description": "Your agent's hands on someone else's keyboard — drive a live Claude Code session from Codex over MCP.",
+  "description": "Drive a live Claude Code session from Codex over MCP — type into it, watch it work, and steer it mid-task.",
   "type": "module",
   "bin": {
-    "remotehands": "bin/remotehands.mjs"
+    "driveclaude": "bin/driveclaude.mjs"
   },
   "files": [
     "bin",
@@ -26,11 +26,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sandeep231004/remotehands.git"
+    "url": "git+https://github.com/sandeep231004/driveclaude.git"
   },
-  "homepage": "https://github.com/sandeep231004/remotehands#readme",
+  "homepage": "https://github.com/sandeep231004/driveclaude#readme",
   "bugs": {
-    "url": "https://github.com/sandeep231004/remotehands/issues"
+    "url": "https://github.com/sandeep231004/driveclaude/issues"
   },
   "engines": {
     "node": ">=18"

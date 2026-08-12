@@ -1,15 +1,15 @@
-# remotehands
+# driveclaude
 
-**Your agent's hands on someone else's keyboard.**
+**Codex drives. Claude types.**
 
-Codex doesn't submit jobs to Claude Code. Codex *uses* Claude Code — typing into
-a live session, watching it work, cutting in mid-task when it drifts, and
-carrying on. Exactly what a person does, except the person is an agent.
+Codex doesn't submit jobs to Claude Code. Codex *drives* it — typing into a live
+session, watching it work, cutting in mid-task when it drifts, and carrying on.
+Exactly what a person does, except the person is an agent.
 
 ```
-   you  ──▶  Codex  ──MCP──▶  remotehands daemon  ──▶  live Claude Code session
-                 ▲                                             │
-                 └────────── everything it says and does ───────┘
+   you  ──▶  Codex  ──MCP──▶  driveclaude daemon  ──▶  live Claude Code session
+                 ▲                                            │
+                 └────────── everything it says and does ──────┘
 ```
 
 You watch Codex. Codex watches Claude.
@@ -20,15 +20,15 @@ Every other Codex↔Claude bridge does **task delegation**: send a task, wait,
 collect a result. Each turn is a fresh process; the supervisor is a dispatcher
 standing outside the room.
 
-`remotehands` keeps **one Claude process alive** with its stdin held open. That
+`driveclaude` keeps **one Claude process alive** with its stdin held open. That
 single fact changes what's possible:
 
-|  | task delegation | remotehands |
+|  | task delegation | driveclaude |
 | --- | --- | --- |
 | process | one per task, dies after | one live session, stays open |
 | mid-task message | impossible — must kill and restart | **queued, absorbed between steps** |
 | context | replayed from history each time | never left |
-| supervisor is | a dispatcher | **the user of the session** |
+| supervisor is | a dispatcher | **the driver of the session** |
 
 ### Steering work in flight
 
@@ -50,8 +50,8 @@ the new instruction on board, and kept going — no lost context, no restart.
 ## Install
 
 ```bash
-npm install -g remotehands
-remotehands init-codex
+npm install -g driveclaude
+driveclaude init-codex
 ```
 
 Needs the [Claude Code](https://claude.com/claude-code) CLI on your PATH and
@@ -83,8 +83,8 @@ new one; the queued correction was still picked up and applied.
 The daemon starts automatically on first use.
 
 ```bash
-remotehands status    # is it running?
-remotehands stop      # stop it and all sessions
+driveclaude status    # is it running?
+driveclaude stop      # stop it and all sessions
 ```
 
 If the daemon does die, nothing is lost permanently — session ids are persisted,
@@ -97,7 +97,7 @@ Put this in `~/.codex/AGENTS.md`:
 ```markdown
 ## Driving Claude Code
 
-You are the user of a live Claude Code session, not a dispatcher. You plan,
+You are the driver of a live Claude Code session, not a dispatcher. You plan,
 type, watch, correct, and review. You do not write implementation code
 yourself.
 
@@ -119,13 +119,13 @@ never restate earlier context. Keep one unanswered message in flight at a time.
 The same engine by hand.
 
 ```bash
-remotehands send "add retry with backoff to the fetcher"   # send, then watch
-remotehands send "actually use the existing helper"        # works mid-task too
-remotehands watch                                          # follow the live session
-remotehands read --since 42                                # replay from a cursor
-remotehands session                                        # status
-remotehands diff --stat                                    # review
-remotehands end                                            # close the session
+driveclaude send "add retry with backoff to the fetcher"   # send, then watch
+driveclaude send "actually use the existing helper"        # works mid-task too
+driveclaude watch                                          # follow the live session
+driveclaude read --since 42                                # replay from a cursor
+driveclaude session                                        # status
+driveclaude diff --stat                                    # review
+driveclaude end                                            # close the session
 ```
 
 Flags: `--cwd <dir>`, `--model <name>`, `--fresh`, `--since <n>`, `--stat`,
@@ -134,7 +134,7 @@ Flags: `--cwd <dir>`, `--model <name>`, `--fresh`, `--since <n>`, `--stat`,
 You can always attach to the exact session Codex is driving:
 
 ```bash
-claude --resume $(remotehands session | awk '/^session/{print $2}')
+claude --resume $(driveclaude session | awk '/^session/{print $2}')
 ```
 
 ## Autonomy
@@ -162,9 +162,9 @@ and git. Work on a branch.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `REMOTEHANDS_MODEL` | `sonnet` | Model for new sessions. |
-| `REMOTEHANDS_CLAUDE_BIN` | `claude` | Path to the Claude Code binary. |
-| `REMOTEHANDS_HOME` | `~/.remotehands` | Sessions, event logs, daemon socket. |
+| `DRIVECLAUDE_MODEL` | `sonnet` | Model for new sessions. |
+| `DRIVECLAUDE_CLAUDE_BIN` | `claude` | Path to the Claude Code binary. |
+| `DRIVECLAUDE_HOME` | `~/.driveclaude` | Sessions, event logs, daemon socket. |
 
 ## How it works
 
@@ -175,9 +175,14 @@ and git. Work on a branch.
    whenever it reaches a step boundary.
 3. Claude's stream-json output is parsed into numbered events (text, thinking,
    tool calls, failures, results) kept in memory and appended to
-   `~/.remotehands/logs/<session>.jsonl`.
+   `~/.driveclaude/logs/<session>.jsonl`.
 4. `read` returns events after your cursor, so Codex polls cheaply and only ever
    sees what's new.
+
+## Unofficial
+
+Not affiliated with or endorsed by Anthropic or OpenAI. "Claude" and "Codex" are
+trademarks of their respective owners.
 
 ## License
 

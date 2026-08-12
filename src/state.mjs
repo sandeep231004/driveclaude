@@ -2,15 +2,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const HOME = process.env.REMOTEHANDS_HOME || path.join(os.homedir(), '.remotehands')
+export const HOME = process.env.DRIVECLAUDE_HOME || path.join(os.homedir(), '.driveclaude')
 export const LOGS_DIR = path.join(HOME, 'logs')
 export const SOCKET = path.join(HOME, 'daemon.sock')
 export const PID_FILE = path.join(HOME, 'daemon.pid')
 export const DAEMON_LOG = path.join(HOME, 'daemon.log')
 const SESSIONS_FILE = path.join(HOME, 'sessions.json')
 
-export const DEFAULT_MODEL = process.env.REMOTEHANDS_MODEL || 'sonnet'
-export const CLAUDE_BIN = process.env.REMOTEHANDS_CLAUDE_BIN || 'claude'
+export const DEFAULT_MODEL = process.env.DRIVECLAUDE_MODEL || 'sonnet'
+export const CLAUDE_BIN = process.env.DRIVECLAUDE_CLAUDE_BIN || 'claude'
 
 export function ensureDirs() {
   fs.mkdirSync(LOGS_DIR, { recursive: true })
@@ -40,6 +40,7 @@ export function rememberSession(cwd, record) {
 }
 
 export function forgetSession(cwd) {
+  ensureDirs()
   const all = readSessions()
   delete all[cwd]
   fs.writeFileSync(SESSIONS_FILE, JSON.stringify(all, null, 2))

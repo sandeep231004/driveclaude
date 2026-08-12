@@ -9,19 +9,19 @@ import { runStdioServer } from '../src/mcp.mjs'
 import { formatDiff, formatEvents, formatInfo, formatList } from '../src/format.mjs'
 import { diff } from '../src/git.mjs'
 
-const HELP = `remotehands — your agent's hands on someone else's keyboard
+const HELP = `driveclaude — drive a live Claude Code session from your supervisor agent
 
-  remotehands mcp                Run the MCP server over stdio (this is what Codex launches)
-  remotehands init-codex         Register the MCP server in ~/.codex/config.toml
-  remotehands send <message>     Type a message into the live session, then watch
-  remotehands watch              Follow the live session
-  remotehands read               Print the session so far
-  remotehands session            Status of this directory's session
-  remotehands sessions           All sessions
-  remotehands end                Close this directory's session
-  remotehands diff               Working-tree diff
-  remotehands daemon             Run the session daemon in the foreground
-  remotehands stop               Stop the daemon and all sessions
+  driveclaude mcp                Run the MCP server over stdio (this is what Codex launches)
+  driveclaude init-codex         Register the MCP server in ~/.codex/config.toml
+  driveclaude send <message>     Type a message into the live session, then watch
+  driveclaude watch              Follow the live session
+  driveclaude read               Print the session so far
+  driveclaude session            Status of this directory's session
+  driveclaude sessions           All sessions
+  driveclaude end                Close this directory's session
+  driveclaude diff               Working-tree diff
+  driveclaude daemon             Run the session daemon in the foreground
+  driveclaude stop               Stop the daemon and all sessions
 
 Options
   --cwd <dir>     Directory the session works in (default: current directory)
@@ -65,8 +65,8 @@ async function follow(cwd, since = 0) {
 function initCodex() {
   const configPath = path.join(os.homedir(), '.codex', 'config.toml')
   const block = [
-    '[mcp_servers.hands]',
-    'command = "remotehands"',
+    '[mcp_servers.claude]',
+    'command = "driveclaude"',
     'args = ["mcp"]',
     'startup_timeout_sec = 30',
     'tool_timeout_sec = 60',
@@ -75,7 +75,7 @@ function initCodex() {
   fs.mkdirSync(path.dirname(configPath), { recursive: true })
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : ''
 
-  if (existing.includes('[mcp_servers.hands]')) {
+  if (existing.includes('[mcp_servers.claude]')) {
     console.log(`Already registered in ${configPath}:\n\n${block}`)
   } else {
     fs.writeFileSync(configPath, `${existing.trimEnd()}${existing.trim() ? '\n\n' : ''}${block}\n`)
@@ -93,7 +93,7 @@ async function main() {
 
   switch (cmd) {
     case 'daemon':
-      startDaemon()
+      await startDaemon()
       return
 
     case 'mcp':
@@ -106,7 +106,7 @@ async function main() {
 
     case 'send': {
       const message = positional.join(' ')
-      if (!message) throw new Error('usage: remotehands send "<message>"')
+      if (!message) throw new Error('usage: driveclaude send "<message>"')
       const snap = await request('send', {
         cwd,
         message,
@@ -159,6 +159,12 @@ async function main() {
         return
       }
       await request('shutdown', {})
+      // The daemon acknowledges before it exits, so wait for it to actually go —
+      // otherwise the very next command races a dying daemon and gets stale answers.
+      for (let i = 0; i < 40; i++) {
+        await sleep(100)
+        if (!(await daemonRunning())) break
+      }
       console.log('daemon stopped')
       return
     }
