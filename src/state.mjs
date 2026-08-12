@@ -74,6 +74,19 @@ export function resolveCwd(cwd) {
 const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json')
 
 /**
+ * A missing file is a clean install — start from {}. A file that exists but
+ * won't parse is a config we don't understand, so we leave it alone rather
+ * than risk clobbering it.
+ */
+function readClaudeConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8'))
+  } catch (e) {
+    return e.code === 'ENOENT' ? {} : null
+  }
+}
+
+/**
  * --dangerously-skip-permissions means a spawned session never shows the
  * interactive trust dialog, so the project never gets marked trusted. Left
  * unfixed, a human later running plain `claude` in that directory hits the
@@ -81,11 +94,20 @@ const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json')
  * behind a dialog instead of an unmarked but reachable-by-uuid session.
  */
 export function trustProject(cwd) {
-  const config = readJson(CLAUDE_CONFIG, null)
+  const config = readClaudeConfig()
   if (!config) return
   config.projects ||= {}
   config.projects[cwd] = { ...config.projects[cwd], hasTrustDialogAccepted: true }
+
+  // Write-then-rename so a crash mid-write can never leave ~/.claude.json
+  // truncated or half-written — the rename is atomic on the same filesystem.
+  const tmp = `${CLAUDE_CONFIG}.${process.pid}.tmp`
   try {
-    fs.writeFileSync(CLAUDE_CONFIG, JSON.stringify(config))
-  } catch {}
+    fs.writeFileSync(tmp, JSON.stringify(config))
+    fs.renameSync(tmp, CLAUDE_CONFIG)
+  } catch {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {}
+  }
 }
