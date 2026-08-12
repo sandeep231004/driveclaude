@@ -4,7 +4,7 @@
   "description": "Your agent's hands on someone else's keyboard — drive a live Claude Code session from Codex over MCP.",
   "type": "module",
   "bin": {
-    "remotehands": "./bin/remotehands.mjs"
+    "remotehands": "bin/remotehands.mjs"
   },
   "files": [
     "bin",
