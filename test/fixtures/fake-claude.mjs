@@ -23,7 +23,38 @@ const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`)
 emit({ type: 'system', subtype: 'init', session_id: sessionId, model: 'sonnet' })
 
 let turn = 0
-let chain = Promise.resolve()
+let working = false
+const inbox = []
+
+async function respond() {
+  if (working || inbox.length === 0) return
+  working = true
+  turn += 1
+  const n = turn
+  const messages = [inbox.shift()]
+  emit({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: `/fake/turn-${n}.txt` } },
+        { type: 'text', text: `ack turn ${n}: ${messages[0]}` },
+      ],
+    },
+  })
+  await sleep(delay)
+  // Real Claude consumes messages written during a response as in-flight
+  // steering and emits one result for the combined interaction.
+  messages.push(...inbox.splice(0))
+  if (messages.length > 1) {
+    emit({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `steered: ${messages.slice(1).join(' | ')}` }] },
+    })
+  }
+  emit({ type: 'result', result: `done turn ${n}`, is_error: false, total_cost_usd: 0.001, duration_ms: 10 })
+  working = false
+  setImmediate(respond)
+}
 
 const rl = readline.createInterface({ input: process.stdin })
 rl.on('line', (line) => {
@@ -37,20 +68,7 @@ rl.on('line', (line) => {
   const text = msg?.message?.content?.[0]?.text
   if (text === 'CRASH_NOW') process.exit(1)
 
-  chain = chain.then(async () => {
-    turn += 1
-    const n = turn
-    emit({
-      type: 'assistant',
-      message: {
-        content: [
-          { type: 'tool_use', name: 'Read', input: { file_path: `/fake/turn-${n}.txt` } },
-          { type: 'text', text: `ack turn ${n}: ${text}` },
-        ],
-      },
-    })
-    await sleep(delay)
-    emit({ type: 'result', result: `done turn ${n}`, is_error: false, total_cost_usd: 0.001, duration_ms: 10 })
-  })
+  inbox.push(text)
+  respond()
 })
 rl.on('close', () => process.exit(0))

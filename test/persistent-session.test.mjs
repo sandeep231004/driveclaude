@@ -88,23 +88,16 @@ async function main() {
     assert.equal(second.sessionId, first.sessionId, 'normal sends must reuse the live session')
     assert.equal(second.queued, true, 'a mid-turn send must be reported as queued')
 
-    const afterOne = await waitFor(async () => {
-      const snapshot = await request(daemon.socketPath, 'read', { cwd, since: 0 })
-      return snapshot.turns === 1 ? snapshot : null
-    }, 'first queued turn never completed')
-    assert.equal(afterOne.status, 'working', 'session must stay working while a queued turn remains')
-    assert.equal(afterOne.queued, 0, 'the completed turn must consume exactly one queue entry')
+    const afterOne = await waitForTurns(daemon.socketPath, cwd, 1)
+    assert.equal(afterOne.status, 'idle', 'one result acknowledges in-flight steering messages')
+    assert.equal(afterOne.queued, 0, 'a result must clear all accepted in-flight messages')
+    assert(afterOne.events.some((event) => event.kind === 'tool' && event.name === 'Read'))
+    assert(afterOne.events.some((event) => event.kind === 'text' && event.text.includes('steered: second')))
+    assert(afterOne.events.some((event) => event.kind === 'result' && event.costUsd === 0.001))
 
-    const afterTwo = await waitForTurns(daemon.socketPath, cwd, 2)
-    assert.equal(afterTwo.status, 'idle')
-    assert.equal(afterTwo.queued, 0)
-    assert(afterTwo.events.some((event) => event.kind === 'tool' && event.name === 'Read'))
-    assert(afterTwo.events.some((event) => event.kind === 'text' && event.text.includes('ack turn 2')))
-    assert(afterTwo.events.some((event) => event.kind === 'result' && event.costUsd === 0.001))
-
-    const cursor = afterTwo.cursor
+    const cursor = afterOne.cursor
     await request(daemon.socketPath, 'send', { cwd, message: 'third' })
-    const afterThree = await waitForTurns(daemon.socketPath, cwd, 3)
+    const afterThree = await waitForTurns(daemon.socketPath, cwd, 2)
     const incremental = await request(daemon.socketPath, 'read', { cwd, since: cursor })
     assert(incremental.events.length > 0, 'cursor reads must return new events')
     assert(incremental.events.every((event) => event.seq > cursor))
