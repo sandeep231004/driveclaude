@@ -23,6 +23,11 @@ standing outside the room.
 `driveclaude` keeps **one Claude process alive** with its stdin held open. That
 single fact changes what's possible:
 
+This persistent stream-JSON session is intentional and is the default backend:
+it gives Codex structured, incremental visibility into Claude's text, tool
+calls, failures, costs, and turn completion while allowing follow-up messages
+at any step boundary. It does not create `claude agents` dashboard jobs.
+
 |  | task delegation | driveclaude |
 | --- | --- | --- |
 | process | one per task, dies after | one live session, stays open |

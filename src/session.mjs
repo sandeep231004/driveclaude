@@ -154,9 +154,18 @@ export class Session {
 
     if (m.type === 'result') {
       this.turns += 1
-      this.busy = false
-      this.queued = 0
-      this.status = 'idle'
+      // A result completes exactly one turn. If more messages were queued
+      // while that turn was running, Claude will consume them next from the
+      // same stdin stream. Keep reporting the session as working until the
+      // final queued turn completes instead of briefly claiming it is idle.
+      if (this.queued > 0) {
+        this.queued -= 1
+        this.busy = true
+        this.status = 'working'
+      } else {
+        this.busy = false
+        this.status = 'idle'
+      }
       this._push('result', {
         text: m.result || '',
         isError: Boolean(m.is_error),
