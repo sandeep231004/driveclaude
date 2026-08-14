@@ -6,7 +6,7 @@ Codex is good at understanding a repository, making a plan, setting acceptance
 criteria, watching progress, and reviewing results. Claude Code is good at
 doing the implementation. Most agent integrations connect them with a simple
 handoff: Codex sends a task, waits for completion, and reviews the result.
-driveclaude keeps Codex involved throughout the work and turns it into an
+**driveclaude** keeps Codex involved throughout the work and turns it into an
 active supervisor:
 
 ~~~text
