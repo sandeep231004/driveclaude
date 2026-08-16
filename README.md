@@ -87,6 +87,7 @@ verify the result.
 | MCP tool | Purpose |
 | --- | --- |
 | **send(cwd, message, model?, fresh?)** | Start, continue, or steer Claude |
+| **adopt(cwd, sessionId, model?)** | Take over a Claude conversation started outside driveclaude |
 | **read(cwd, since?)** | Read new text, tool calls, errors, and results |
 | **session(cwd)** | Inspect one live or remembered session |
 | **sessions()** | List sessions across directories |
@@ -116,6 +117,11 @@ driveclaude stop        # stop the daemon and all sessions
 - **end** stops the process but remembers its session ID; the next Codex
   **send** resumes it.
 - **fresh: true** intentionally starts a new conversation.
+- **adopt** takes over a conversation that was started outside driveclaude
+  (e.g. by hand, in an interactive `claude` session) — from then on it behaves
+  like any driveclaude-created session. Refuses if driveclaude already has a
+  live session for that directory, and fails immediately if no Claude
+  transcript matches the given session ID and directory.
 - Completed conversation history is resumable after a daemon restart.
 - In-flight work and unread steering messages are not durable.
 - Event cursors reset after restart; earlier JSONL logs remain on disk.
@@ -189,13 +195,17 @@ npm pack --dry-run
 ~~~
 
 Tests cover configuration trust, fresh sessions, mid-task steering, daemon
-restart, crash recovery, and conversation resumption using a scripted Claude
-stand-in.
+restart, crash recovery, conversation resumption, and adopting an existing
+Claude conversation, using a scripted Claude stand-in.
 
 ## Known limits
 
 - One session per directory; avoid path aliases to the same working tree.
 - Mid-task steering is best-effort and not durable across a process crash.
+- **adopt** does not detect or block a second writer on the same
+  conversation. If the original interactive session is still open, leave it
+  idle to watch — do not type into it once driveclaude has adopted it, or
+  the two processes can corrupt the shared transcript.
 - **send** steers between Claude steps; it does not interrupt a running tool.
 - Persistent stream-json sessions do not create Claude dashboard agent jobs.
 

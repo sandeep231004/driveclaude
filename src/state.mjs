@@ -86,6 +86,18 @@ function readClaudeConfig() {
   }
 }
 
+const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
+
+/**
+ * Claude Code's own transcript path for a session, so adopt() can check a
+ * session actually exists for this cwd before recording it and spawning
+ * anything. driveclaude never writes here — it only reads.
+ */
+export function transcriptExists(cwd, sessionId) {
+  const file = path.join(CLAUDE_PROJECTS_DIR, cwd.replace(/\//g, '-'), `${sessionId}.jsonl`)
+  return fs.existsSync(file)
+}
+
 /**
  * --dangerously-skip-permissions means a spawned session never shows the
  * interactive trust dialog, so the project never gets marked trusted. Left

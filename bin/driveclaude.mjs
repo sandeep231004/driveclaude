@@ -14,6 +14,7 @@ const HELP = `driveclaude — drive a live Claude Code session from your supervi
   driveclaude mcp                Run the MCP server over stdio (this is what Codex launches)
   driveclaude init-codex         Register the MCP server in ~/.codex/config.toml
   driveclaude send <message>     Type a message into the live session, then watch
+  driveclaude adopt <session-id> Adopt an existing Claude conversation, then watch
   driveclaude watch              Follow the live session
   driveclaude read               Print the session so far
   driveclaude session            Status of this directory's session
@@ -121,6 +122,17 @@ async function main() {
       if (flags['no-follow']) return
       console.log('')
       await follow(cwd, snap.cursorBefore)
+      return
+    }
+
+    case 'adopt': {
+      const sessionId = positional[0]
+      if (!sessionId) throw new Error('usage: driveclaude adopt <session-id>')
+      const snap = await request('adopt', { cwd, sessionId, model: flags.model })
+      console.log(`adopted · session ${snap.sessionId}`)
+      if (flags['no-follow']) return
+      console.log('')
+      await follow(cwd, 0)
       return
     }
 
