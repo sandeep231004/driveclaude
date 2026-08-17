@@ -8,6 +8,7 @@ import {
   forgetSession,
   readSessions,
   rememberSession,
+  findTranscript,
   resolveCwd,
 } from './state.mjs'
 import { Session } from './session.mjs'
@@ -74,6 +75,28 @@ const ops = {
     sessions: [...sessions.values()].map((s) => s.snapshot()),
     remembered: readSessions(),
   }),
+
+  adopt: ({ cwd, sessionId, model }) => {
+    const dir = resolveCwd(cwd)
+    if (!sessionId || !sessionId.trim()) throw new Error('sessionId is required')
+    const existing = sessions.get(dir)
+    if (existing && existing.status !== 'exited') {
+      throw new Error(`a driveclaude-controlled session is already live for ${dir} — end it first`)
+    }
+    const transcript = findTranscript(dir, sessionId)
+    if (!transcript.found) {
+      throw new Error(`no Claude transcript found for session ${sessionId}`)
+    }
+    // Right id, wrong directory: resuming here would carry the conversation
+    // into a repo it was never working in, so say where it actually belongs.
+    if (transcript.cwd && transcript.cwd !== dir) {
+      throw new Error(`session ${sessionId} belongs to ${transcript.cwd}, not ${dir}`)
+    }
+    const session = new Session({ cwd: dir, model: model || DEFAULT_MODEL, sessionId }).start()
+    sessions.set(dir, session)
+    rememberSession(dir, { sessionId: session.sessionId, model: session.model })
+    return session.snapshot()
+  },
 
   end: ({ cwd }) => {
     const dir = resolveCwd(cwd)

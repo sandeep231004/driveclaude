@@ -54,6 +54,37 @@ export function createServer() {
   )
 
   server.registerTool(
+    'adopt',
+    {
+      title: 'Adopt an existing Claude conversation',
+      description:
+        'Takes over a Claude conversation that was started outside driveclaude — for example an interactive ' +
+        '`claude` session someone was running by hand, already partway through work. After adopting, send/read/' +
+        'session/diff control it exactly like any driveclaude-created session, and the conversation history is ' +
+        'preserved.\n\n' +
+        'Requires the session ID of that conversation (from `/status` inside it, or the terminal) and the exact ' +
+        'directory it was running in. Fails immediately, without side effects, if no matching Claude transcript ' +
+        'exists for that ID and directory.\n\n' +
+        'The original terminal can stay open to watch, but do not type into it after adopting — two processes ' +
+        'writing to the same conversation at once can corrupt it. Refuses if driveclaude already has a live ' +
+        'session for this directory; end that one first.',
+      inputSchema: {
+        cwd: z.string().describe('Absolute path to the directory the existing session was running in.'),
+        sessionId: z.string().describe('The session ID of the existing Claude conversation to adopt.'),
+        model: z.string().optional().describe(`Model to resume it with. Default: ${DEFAULT_MODEL}.`),
+      },
+    },
+    async ({ cwd, sessionId, model }) => {
+      try {
+        const snap = await request('adopt', { cwd, sessionId, model })
+        return text(`Adopted; Claude is running.\nsession ${snap.sessionId} · ${snap.status}\nRead from cursor 0 to watch.`)
+      } catch (e) {
+        return fail(e)
+      }
+    },
+  )
+
+  server.registerTool(
     'read',
     {
       title: 'Watch the session',
