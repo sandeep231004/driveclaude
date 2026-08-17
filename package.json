@@ -1,6 +1,6 @@
 {
   "name": "driveclaude",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drive a live Claude Code session from Codex over MCP — type into it, watch it work, and steer it mid-task.",
   "type": "module",
   "bin": {
