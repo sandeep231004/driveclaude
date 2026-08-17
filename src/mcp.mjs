@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
@@ -9,8 +10,12 @@ import { diff } from './git.mjs'
 const text = (t) => ({ content: [{ type: 'text', text: t }] })
 const fail = (e) => ({ content: [{ type: 'text', text: `error: ${e.message}` }], isError: true })
 
+// Read from the package rather than repeating it here: this is the version MCP
+// clients display, and a hand-maintained copy silently went stale at 0.1.0.
+const { version } = createRequire(import.meta.url)('../package.json')
+
 export function createServer() {
-  const server = new McpServer({ name: 'driveclaude', version: '0.1.0' })
+  const server = new McpServer({ name: 'driveclaude', version })
 
   server.registerTool(
     'send',
