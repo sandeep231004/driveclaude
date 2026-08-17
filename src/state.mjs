@@ -89,13 +89,62 @@ function readClaudeConfig() {
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
 
 /**
- * Claude Code's own transcript path for a session, so adopt() can check a
- * session actually exists for this cwd before recording it and spawning
- * anything. driveclaude never writes here — it only reads.
+ * Every transcript records the absolute directory it ran in. That is the only
+ * trustworthy way to tie a session id to a cwd, so read it rather than infer
+ * it from the folder name. Transcripts grow to megabytes, so only the head is
+ * read — the cwd appears within the first few entries.
  */
-export function transcriptExists(cwd, sessionId) {
-  const file = path.join(CLAUDE_PROJECTS_DIR, cwd.replace(/\//g, '-'), `${sessionId}.jsonl`)
-  return fs.existsSync(file)
+function recordedCwd(file) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(64 * 1024)
+    const n = fs.readSync(fd, buf, 0, buf.length, 0)
+    const m = buf.toString('utf8', 0, n).match(/"cwd"\s*:\s*("(?:[^"\\]|\\.)*")/)
+    return m ? JSON.parse(m[1]) : null
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Locate Claude Code's own transcript for a session, so adopt() can verify it
+ * before recording anything or spawning a process. driveclaude only reads here.
+ *
+ * Transcripts live at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl. That
+ * encoding is undocumented and lossy — it dashes out '/' and '.' alike, so
+ * '/x/.claude/y' becomes '-x--claude-y' — so it is used only as a fast path.
+ * When it misses we scan for the transcript by filename, which is safe because
+ * session ids are uuids. Either way the cwd we report comes from the file's own
+ * contents, never from the folder name.
+ */
+export function findTranscript(cwd, sessionId) {
+  const encoded = path.join(CLAUDE_PROJECTS_DIR, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
+  let file = fs.existsSync(encoded) ? encoded : null
+
+  if (!file) {
+    let dirs = []
+    try {
+      dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR)
+    } catch {
+      return { found: false }
+    }
+    for (const d of dirs) {
+      const candidate = path.join(CLAUDE_PROJECTS_DIR, d, `${sessionId}.jsonl`)
+      if (fs.existsSync(candidate)) {
+        file = candidate
+        break
+      }
+    }
+  }
+
+  return file ? { found: true, cwd: recordedCwd(file) } : { found: false }
 }
 
 /**

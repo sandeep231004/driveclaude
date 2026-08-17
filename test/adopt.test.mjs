@@ -73,10 +73,17 @@ async function waitFor(predicate, message, timeoutMs = 5000) {
   throw new Error(message)
 }
 
+// Mirrors how the real Claude CLI stores a transcript: the folder name is the
+// cwd with every non-alphanumeric character dashed out (so '.' collapses just
+// like '/'), and the entries themselves record the true absolute cwd.
 function seedTranscript(home, cwd, sessionId) {
-  const dir = path.join(home, '.claude', 'projects', cwd.replace(/\//g, '-'))
+  const dir = path.join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), `${JSON.stringify({ sessionId })}\n`)
+  fs.writeFileSync(
+    path.join(dir, `${sessionId}.jsonl`),
+    `${JSON.stringify({ type: 'queue-operation', sessionId })}\n` +
+      `${JSON.stringify({ type: 'user', sessionId, cwd })}\n`,
+  )
 }
 
 async function main() {
@@ -143,10 +150,33 @@ async function main() {
       'adopt must overwrite the remembered session for that cwd',
     )
 
+    // 5. a cwd containing a dot still resolves. Regression: the transcript
+    // lookup originally dashed out only '/', so every path with a '.' in it —
+    // including any .claude/worktrees checkout — was reported as having no
+    // transcript and could not be adopted at all.
+    const dottedCwd = path.join(cwd, '.claude', 'worktrees', 'proj')
+    fs.mkdirSync(dottedCwd, { recursive: true })
+    const idDotted = randomUUID()
+    seedTranscript(home, dottedCwd, idDotted)
+    const adoptedDotted = await requestOnce(socketPath, 'adopt', { cwd: dottedCwd, sessionId: idDotted })
+    assert.equal(adoptedDotted.sessionId, idDotted, 'a cwd containing a dot must still find its transcript')
+
+    // 6. right session id, wrong directory -> refused, naming where it belongs.
+    // Clear the live session first so this exercises the transcript check
+    // rather than the already-live guard.
+    await requestOnce(socketPath, 'end', { cwd })
+    await assert.rejects(
+      requestOnce(socketPath, 'adopt', { cwd, sessionId: idDotted }),
+      new RegExp(`belongs to ${dottedCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      'adopting a session that belongs to another directory must be refused',
+    )
+
     console.log('PASS: adopt rejects a sessionId with no matching transcript, without side effects')
     console.log('PASS: adopt resumes a valid transcript and behaves like a normal session afterwards')
     console.log('PASS: adopt refuses a cwd with an already-live driveclaude session')
     console.log('PASS: adopt overwrites a remembered (non-live) session for that cwd')
+    console.log('PASS: adopt resolves a cwd containing a dot')
+    console.log('PASS: adopt refuses a session that belongs to a different directory')
     console.log('all adopt regression tests passed')
   } finally {
     daemon.kill('SIGTERM')

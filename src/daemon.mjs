@@ -8,8 +8,8 @@ import {
   forgetSession,
   readSessions,
   rememberSession,
+  findTranscript,
   resolveCwd,
-  transcriptExists,
 } from './state.mjs'
 import { Session } from './session.mjs'
 
@@ -83,8 +83,14 @@ const ops = {
     if (existing && existing.status !== 'exited') {
       throw new Error(`a driveclaude-controlled session is already live for ${dir} — end it first`)
     }
-    if (!transcriptExists(dir, sessionId)) {
-      throw new Error(`no Claude transcript found for session ${sessionId} in ${dir}`)
+    const transcript = findTranscript(dir, sessionId)
+    if (!transcript.found) {
+      throw new Error(`no Claude transcript found for session ${sessionId}`)
+    }
+    // Right id, wrong directory: resuming here would carry the conversation
+    // into a repo it was never working in, so say where it actually belongs.
+    if (transcript.cwd && transcript.cwd !== dir) {
+      throw new Error(`session ${sessionId} belongs to ${transcript.cwd}, not ${dir}`)
     }
     const session = new Session({ cwd: dir, model: model || DEFAULT_MODEL, sessionId }).start()
     sessions.set(dir, session)
