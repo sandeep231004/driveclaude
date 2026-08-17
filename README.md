@@ -114,8 +114,13 @@ driveclaude stop        # stop the daemon and all sessions
 ## Hand over a session already in progress
 
 Claude is often already working in a terminal — part-way through a refactor,
-carrying all of that context. **adopt** hands that conversation to Codex
-instead of starting over.
+carrying all of that context. Meanwhile the real thinking about where the work
+should go has been happening somewhere else: a long design discussion with
+Codex, which knows the constraints and has the better view of what to do next.
+
+**adopt** puts the two together. It hands the in-flight conversation to Codex
+so the side holding the ideas starts driving, without restarting the work or
+re-explaining it.
 
 1. Ask the running session for its ID with **/status**, then exit it. Leaving
    it open to watch is fine; typing into it after handover is not, because two
