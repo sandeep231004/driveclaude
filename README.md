@@ -105,10 +105,40 @@ driveclaude status      # daemon status and log location
 driveclaude sessions    # all live and remembered sessions
 driveclaude session     # session for the current directory
 driveclaude watch       # follow the current session
+driveclaude adopt <id>  # take over a session started outside driveclaude
 driveclaude diff        # inspect working-tree changes
 driveclaude end         # stop this live session
 driveclaude stop        # stop the daemon and all sessions
 ~~~
+
+## Hand over a session already in progress
+
+Claude is often already working in a terminal — part-way through a refactor,
+carrying all of that context. Meanwhile the real thinking about where the work
+should go has been happening somewhere else: a long design discussion with
+Codex, which knows the constraints and has the better view of what to do next.
+
+**adopt** puts the two together. It hands the in-flight conversation to Codex
+so the side holding the ideas starts driving, without restarting the work or
+re-explaining it.
+
+1. Ask the running session for its ID with **/status**, then exit it. Leaving
+   it open to watch is fine; typing into it after handover is not, because two
+   processes writing one conversation can corrupt it.
+2. Hand it over, from that directory:
+
+   ~~~bash
+   driveclaude adopt 0b9c1f42-5d38-4a7e-9c61-3f2ab8e40d15
+   ~~~
+
+Or have Codex call **adopt({ cwd, sessionId })** directly.
+
+From then on **send**, **read**, and **diff** behave exactly as they do for a
+session driveclaude started itself, with the conversation history intact.
+
+Adoption fails immediately, and changes nothing, if no transcript matches the
+session ID, if that session belongs to a different directory, or if driveclaude
+already has a live session for this one.
 
 ## Persistence
 
@@ -117,11 +147,8 @@ driveclaude stop        # stop the daemon and all sessions
 - **end** stops the process but remembers its session ID; the next Codex
   **send** resumes it.
 - **fresh: true** intentionally starts a new conversation.
-- **adopt** takes over a conversation that was started outside driveclaude
-  (e.g. by hand, in an interactive `claude` session) — from then on it behaves
-  like any driveclaude-created session. Refuses if driveclaude already has a
-  live session for that directory, and fails immediately if no Claude
-  transcript matches the given session ID and directory.
+- **adopt** takes over a conversation started outside driveclaude and remembers
+  it like any other, replacing whatever that directory was pointing at.
 - Completed conversation history is resumable after a daemon restart.
 - In-flight work and unread steering messages are not durable.
 - Event cursors reset after restart; earlier JSONL logs remain on disk.
