@@ -104,12 +104,22 @@ These commands observe or manage the sessions Codex is driving:
 driveclaude status      # daemon status and log location
 driveclaude sessions    # all live and remembered sessions
 driveclaude session     # session for the current directory
-driveclaude watch       # follow the current session
+driveclaude watch       # live view of the session (stays attached; ctrl-c to stop)
 driveclaude adopt <id>  # take over a session started outside driveclaude
 driveclaude diff        # inspect working-tree changes
 driveclaude end         # stop this live session
 driveclaude stop        # stop the daemon and all sessions
 ~~~
+
+**watch** is the window into a session someone else is driving. It replays the
+conversation, then stays attached and streams each message, tool call, and
+turn as it happens, with a live status line showing state, turns, elapsed time
+and cost. Going idle is not the end — the supervisor can send again at any
+moment — so it keeps watching until you stop it.
+
+Claude Code's own **claude agents** view lists *background* agents, and a
+driveclaude session is owned by driveclaude rather than by Claude's daemon, so
+it will not appear there. **watch** is how you look at one.
 
 ## Hand over a session already in progress
 

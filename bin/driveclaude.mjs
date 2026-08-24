@@ -7,6 +7,7 @@ import { daemonRunning, request } from '../src/client.mjs'
 import { startDaemon } from '../src/daemon.mjs'
 import { runStdioServer } from '../src/mcp.mjs'
 import { formatDiff, formatEvents, formatInfo, formatList } from '../src/format.mjs'
+import { watchSession } from '../src/watch.mjs'
 import { diff } from '../src/git.mjs'
 
 const HELP = `driveclaude — drive a live Claude Code session from your supervisor agent
@@ -15,7 +16,7 @@ const HELP = `driveclaude — drive a live Claude Code session from your supervi
   driveclaude init-codex         Register the MCP server in ~/.codex/config.toml
   driveclaude send <message>     Type a message into the live session, then watch
   driveclaude adopt <session-id> Adopt an existing Claude conversation, then watch
-  driveclaude watch              Follow the live session
+  driveclaude watch              Follow the live session (stays attached; ctrl-c to stop)
   driveclaude read               Print the session so far
   driveclaude session            Status of this directory's session
   driveclaude sessions           All sessions
@@ -47,21 +48,6 @@ function parseArgs(argv) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-async function follow(cwd, since = 0) {
-  let cursor = since
-  for (;;) {
-    const snap = await request('read', { cwd, since: cursor })
-    if (snap.events.length) {
-      process.stdout.write(`${formatEvents({ ...snap, filesTouched: [] }, { showHeader: false })
-        .split('\ncursor:')[0]
-        .trimEnd()}\n`)
-      cursor = snap.cursor
-    }
-    if (snap.status !== 'working') return snap
-    await sleep(1500)
-  }
-}
 
 function initCodex() {
   const configPath = path.join(os.homedir(), '.codex', 'config.toml')
@@ -120,8 +106,7 @@ async function main() {
           : `sent · session ${snap.sessionId}`,
       )
       if (flags['no-follow']) return
-      console.log('')
-      await follow(cwd, snap.cursorBefore)
+      await watchSession(cwd, { since: snap.cursorBefore, until: 'idle' })
       return
     }
 
@@ -131,17 +116,15 @@ async function main() {
       const snap = await request('adopt', { cwd, sessionId, model: flags.model })
       console.log(`adopted · session ${snap.sessionId}`)
       if (flags['no-follow']) return
-      console.log('')
-      await follow(cwd, 0)
+      await watchSession(cwd, { since: 0, until: 'idle' })
       return
     }
 
-    case 'watch': {
-      const snap = await request('read', { cwd, since: 0 })
-      console.log(formatEvents(snap))
-      if (snap.status === 'working') await follow(cwd, snap.cursor)
+    case 'watch':
+      // Replays the conversation so far, then stays attached. Going idle is not
+      // the end: whoever is driving can send again, and this keeps showing it.
+      await watchSession(cwd, { since: Number(flags.since || 0), until: 'forever' })
       return
-    }
 
     case 'read':
       console.log(formatEvents(await request('read', { cwd, since: Number(flags.since || 0) })))
