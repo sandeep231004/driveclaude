@@ -13,6 +13,7 @@ const paint = (code, s) => (TTY ? `\x1b[${code}m${s}\x1b[0m` : s)
 const dim = (s) => paint('2', s)
 const bold = (s) => paint('1', s)
 const cyan = (s) => paint('36', s)
+const magenta = (s) => paint('35', s)
 const green = (s) => paint('32', s)
 const yellow = (s) => paint('33', s)
 const red = (s) => paint('31', s)
@@ -47,35 +48,54 @@ function wrap(text, indent) {
   return out
 }
 
-function renderEvent(e) {
+/** A speaker turn: a coloured bullet, a name, then the body indented under it. */
+function speaker(dot, name, text, note = '') {
+  return ['', `${dot} ${bold(name)}${note}`, ...wrap(text, '  ').map((l) => `  ${l}`)]
+}
+
+/** Paths inside the session's own directory read better without the prefix. */
+const relative = (target, cwd) =>
+  cwd && target.startsWith(`${cwd}/`) ? target.slice(cwd.length + 1) : target
+
+function renderEvent(e, cwd) {
   switch (e.kind) {
-    case 'you': {
-      const lines = wrap(e.text, '  ')
-      const tag = e.queued ? dim(' (queued mid-task)') : ''
-      return [`\n${cyan('▌ supervisor')}${tag}`, ...lines.map((l) => cyan(`▌ ${l}`))]
-    }
+    case 'you':
+      return speaker(cyan('●'), cyan('supervisor'), e.text, e.queued ? dim('  queued mid-task') : '')
     case 'text':
-      return ['', ...wrap(e.text, '')]
+      return speaker(magenta('●'), magenta('claude'), e.text)
     case 'thinking':
-      return [dim(`  ${fit(`thinking… ${e.text.replace(/\s+/g, ' ')}`, 2)}`)]
-    case 'tool':
-      return [dim(`  ${e.name}${e.target ? ` ${e.target}` : ''}`)]
+      return [dim(`  ${fit(`thinking  ${e.text.replace(/\s+/g, ' ')}`, 2)}`)]
+    case 'tool': {
+      // Indented under the message that requested it, the way a coding agent
+      // shows its work: name first, argument dimmed behind it.
+      const target = e.target ? relative(e.target, cwd) : ''
+      return [`  ${dim('⎿')} ${e.name}${target ? ` ${dim(fit(target, 6 + e.name.length))}` : ''}`]
+    }
     case 'tool_error':
-      return [red(`  ! ${fit(e.text.replace(/\s+/g, ' '), 4)}`)]
+      return [`  ${dim('⎿')} ${red(fit(e.text.replace(/\s+/g, ' '), 6))}`]
     case 'result': {
       const bits = []
       if (e.durationMs != null) bits.push(secs(e.durationMs))
       if (e.costUsd != null) bits.push(`$${e.costUsd.toFixed(4)}`)
-      const label = e.isError ? red('turn failed') : green('turn complete')
-      return ['', dim('─'.repeat(3)) + ` ${label} ` + dim(bits.join(' · '))]
+      const mark = e.isError ? red('✗ turn failed') : green('✓ turn complete')
+      return ['', `  ${mark}${bits.length ? dim(`  ${bits.join(' · ')}`) : ''}`]
     }
     case 'error':
-      return [red(`  !! ${e.text}`)]
+      return ['', `${red('●')} ${red('error')}`, ...wrap(e.text, '  ').map((l) => `  ${red(l)}`)]
     case 'system':
-      return [dim(`  ${e.text}`)]
+      return [dim(`  ${fit(e.text, 2)}`)]
     default:
-      return [dim(`  [${e.kind}] ${e.text ?? ''}`)]
+      return [dim(`  ${e.kind} ${fit(e.text ?? '', 4)}`)]
   }
+}
+
+/** Shown once when the view opens, so it is obvious what is being watched. */
+function header(snap) {
+  const id = snap.sessionId ? snap.sessionId.slice(0, 8) : '?'
+  return [
+    bold('driveclaude') + dim(' · watching'),
+    dim(`${snap.cwd}  ${snap.model || ''}  session ${id}`),
+  ].join('\n')
 }
 
 export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
@@ -131,7 +151,10 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
         process.stdout.write(`${red(attached ? `lost the session: ${e.message}` : e.message)}\n`)
         return null
       }
-      attached = true
+      if (!attached) {
+        attached = true
+        process.stdout.write(`${header(snap)}\n`)
+      }
 
       if (snap.events.length) {
         clearStatus()
@@ -139,7 +162,7 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
         if (snap.dropped && cursor === 0) lines.push(dim(`[${snap.dropped} older events dropped]`))
         for (const e of snap.events) {
           if (e.kind === 'result' && e.costUsd != null) cost = e.costUsd
-          lines.push(...renderEvent(e))
+          lines.push(...renderEvent(e, snap.cwd))
         }
         process.stdout.write(`${lines.join('\n')}\n`)
         cursor = snap.cursor
