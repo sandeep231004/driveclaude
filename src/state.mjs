@@ -1,10 +1,27 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+export const IS_WINDOWS = process.platform === 'win32'
+
 export const HOME = process.env.DRIVECLAUDE_HOME || path.join(os.homedir(), '.driveclaude')
 export const LOGS_DIR = path.join(HOME, 'logs')
-export const SOCKET = path.join(HOME, 'daemon.sock')
+
+/**
+ * Windows has no Unix domain sockets — Node listens on a named pipe instead.
+ * Pipe names live in one machine-wide namespace rather than on disk, so the
+ * home directory is hashed into the name. Without that, two users on the same
+ * machine, or two DRIVECLAUDE_HOME values, would collide on a single daemon
+ * instead of each getting their own.
+ */
+export function resolveSocketPath(home, platform = process.platform) {
+  if (platform !== 'win32') return path.join(home, 'daemon.sock')
+  const id = crypto.createHash('sha256').update(home).digest('hex').slice(0, 16)
+  return `\\\\.\\pipe\\driveclaude-${id}`
+}
+
+export const SOCKET = resolveSocketPath(HOME)
 export const PID_FILE = path.join(HOME, 'daemon.pid')
 export const DAEMON_LOG = path.join(HOME, 'daemon.log')
 const SESSIONS_FILE = path.join(HOME, 'sessions.json')

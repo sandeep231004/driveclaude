@@ -2,7 +2,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { CLAUDE_BIN, DEFAULT_MODEL, ensureDirs, eventLogFile, trustProject } from './state.mjs'
+import {
+  CLAUDE_BIN,
+  DEFAULT_MODEL,
+  IS_WINDOWS,
+  ensureDirs,
+  eventLogFile,
+  trustProject,
+} from './state.mjs'
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const MAX_EVENTS = 5000
@@ -70,6 +77,12 @@ export class Session {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
+      // On Windows `claude` is a .cmd shim, which Node refuses to execute
+      // directly, so it has to go through the shell. Quoting is not a concern
+      // here: every argument is a fixed flag, a model name, or a uuid, and the
+      // message text travels over stdin rather than argv.
+      shell: IS_WINDOWS,
+      windowsHide: true,
     })
 
     let buf = ''

@@ -46,6 +46,9 @@ async function launchDaemon() {
     detached: true,
     stdio: ['ignore', log, log],
     env: process.env,
+    // Without this Windows flashes a console window every time the daemon is
+    // started on demand.
+    windowsHide: true,
   })
   child.unref()
   fs.closeSync(log)
