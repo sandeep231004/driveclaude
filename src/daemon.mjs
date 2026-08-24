@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import {
   DEFAULT_MODEL,
+  IS_WINDOWS,
   PID_FILE,
   SOCKET,
   ensureDirs,
@@ -162,13 +163,18 @@ function socketAlive() {
 export async function startDaemon() {
   ensureDirs()
 
-  if (fs.existsSync(SOCKET)) {
-    // Never hijack a healthy daemon: taking its address would strand its live
-    // sessions as unreachable orphans. Only clear a dead socket.
-    if (await socketAlive()) {
-      process.stdout.write('a daemon is already running — nothing to do\n')
-      return null
-    }
+  // Never hijack a healthy daemon: taking its address would strand its live
+  // sessions as unreachable orphans. Probe first, whatever the platform —
+  // a Windows named pipe has no file to look for, so an existence check
+  // would silently skip this and collide on listen().
+  if (await socketAlive()) {
+    process.stdout.write('a daemon is already running — nothing to do\n')
+    return null
+  }
+  // A dead Unix daemon leaves its socket file behind and it must be cleared
+  // before listening. Named pipes vanish with the process, so there is nothing
+  // to clean up on Windows.
+  if (!IS_WINDOWS && fs.existsSync(SOCKET)) {
     try {
       fs.unlinkSync(SOCKET)
     } catch {}
@@ -181,9 +187,11 @@ export async function startDaemon() {
   })
 
   removeRuntimeFiles = () => {
-    try {
-      fs.unlinkSync(SOCKET)
-    } catch {}
+    if (!IS_WINDOWS) {
+      try {
+        fs.unlinkSync(SOCKET)
+      } catch {}
+    }
     try {
       fs.unlinkSync(PID_FILE)
     } catch {}

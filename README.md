@@ -186,7 +186,14 @@ automatically.
 - If the daemon is stale, run **driveclaude stop** and retry.
 - **read** needs a live session; **send** creates or resumes one.
 
-Built for macOS and Linux. Windows is not currently supported.
+Built and tested on macOS and Linux.
+
+Windows support is **experimental and not yet verified on a Windows machine**.
+The platform-specific pieces are in place — the daemon listens on a named pipe
+instead of a Unix socket, and `claude` is launched through the shell because it
+is a `.cmd` shim — but nothing has been exercised end to end there yet. WSL
+remains the reliable route until someone confirms a native run. Reports
+welcome.
 
 ## Configuration
 
