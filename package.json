@@ -1,13 +1,13 @@
 {
   "name": "driveclaude",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Drive a live Claude Code session from Codex over MCP — type into it, watch it work, and steer it mid-task.",
   "type": "module",
   "bin": {
     "driveclaude": "bin/driveclaude.mjs"
   },
   "scripts": {
-    "test": "node test/trust-project.test.mjs && node test/windows-paths.test.mjs && node test/session-registry.test.mjs && node test/watch-render.test.mjs && node test/fresh-session.test.mjs && node test/persistent-session.test.mjs && node test/adopt.test.mjs"
+    "test": "node test/trust-project.test.mjs && node test/windows-paths.test.mjs && node test/canonical-cwd.test.mjs && node test/session-registry.test.mjs && node test/watch-render.test.mjs && node test/fresh-session.test.mjs && node test/persistent-session.test.mjs && node test/adopt.test.mjs && node test/git-diff.test.mjs"
   },
   "files": [
     "bin",

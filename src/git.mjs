@@ -14,11 +14,13 @@ export function diff(cwd, { stat = false, pathspec } = {}) {
   const args = ['--no-pager', 'diff', 'HEAD']
   if (stat) args.push('--stat')
   if (pathspec) args.push('--', pathspec)
+  const untrackedArgs = ['ls-files', '--others', '--exclude-standard']
+  if (pathspec) untrackedArgs.push('--', pathspec)
   return {
     cwd: dir,
     gitRepo: true,
     text: git(dir, args) ?? '',
-    untracked: (git(dir, ['ls-files', '--others', '--exclude-standard']) ?? '')
+    untracked: (git(dir, untrackedArgs) ?? '')
       .split('\n')
       .filter(Boolean),
   }
