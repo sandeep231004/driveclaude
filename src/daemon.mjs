@@ -66,11 +66,12 @@ function ensureSession(cwd, { model, fresh = false, sessionId } = {}) {
 
     const remembered = uniqueByPrefix(Object.values(readSessionRegistry().sessions), sessionId)
     if (!remembered) throw new Error(`no remembered session ${sessionId} — adopt it first`)
-    if (cwd && remembered.cwd !== cwd) {
-      throw new Error(`session ${sessionId} belongs to ${remembered.cwd}, not ${cwd}`)
+    const rememberedCwd = resolveCwd(remembered.cwd)
+    if (cwd && rememberedCwd !== cwd) {
+      throw new Error(`session ${sessionId} belongs to ${rememberedCwd}, not ${cwd}`)
     }
     sessionId = remembered.sessionId
-    cwd = remembered.cwd
+    cwd = rememberedCwd
     model ||= remembered.model
   }
 

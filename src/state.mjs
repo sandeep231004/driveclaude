@@ -68,6 +68,10 @@ function writeSessionRegistry(registry) {
 
 export function rememberSession(cwd, record, { makeDefault = true } = {}) {
   const registry = readSessionRegistry()
+  const previousCwd = registry.sessions[record.sessionId]?.cwd
+  if (previousCwd && previousCwd !== cwd && registry.defaults[previousCwd] === record.sessionId) {
+    delete registry.defaults[previousCwd]
+  }
   registry.sessions[record.sessionId] = {
     ...registry.sessions[record.sessionId],
     ...record,
@@ -100,7 +104,11 @@ export function resolveCwd(cwd) {
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
     throw new Error(`cwd does not exist or is not a directory: ${abs}`)
   }
-  return abs
+  // macOS exposes /tmp through /private/tmp, and symlinked project paths are
+  // common elsewhere. A session belongs to the physical directory, not the
+  // spelling a caller happened to use. Canonicalizing here prevents one repo
+  // from becoming two session namespaces and makes transcript cwd checks fair.
+  return fs.realpathSync.native(abs)
 }
 
 const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json')

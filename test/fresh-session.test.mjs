@@ -62,8 +62,12 @@ async function waitFor(predicate, message, timeoutMs = 5000) {
 
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-home-'))
-  const cwdA = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-a-'))
-  const cwdB = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-b-'))
+  const cwdA = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-a-')),
+  )
+  const cwdB = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-b-')),
+  )
   const socketPath = path.join(home, 'daemon.sock')
   const env = { ...process.env, DRIVECLAUDE_HOME: home, DRIVECLAUDE_CLAUDE_BIN: FAKE_CLAUDE }
 

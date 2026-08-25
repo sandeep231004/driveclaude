@@ -92,7 +92,9 @@ async function main() {
   // same as every other test in this suite.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-adopt-home-'))
   const driveclaudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-adopt-state-'))
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-adopt-cwd-'))
+  const cwd = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-adopt-cwd-')),
+  )
   const socketPath = path.join(driveclaudeHome, 'daemon.sock')
 
   const daemon = spawn(process.execPath, [CLI, 'daemon'], {
@@ -155,7 +157,23 @@ async function main() {
     const adoptedDotted = await requestOnce(socketPath, 'adopt', { cwd: dottedCwd, sessionId: idDotted })
     assert.equal(adoptedDotted.sessionId, idDotted, 'a cwd containing a dot must still find its transcript')
 
-    // 6. right session id, wrong directory -> refused, naming where it belongs.
+    // 6. a symlink alias must resolve to the same physical project. On macOS
+    // /tmp -> /private/tmp creates this exact mismatch in normal use.
+    const realCwd = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(home, 'driveclaude-real-cwd-')),
+    )
+    const aliasCwd = path.join(home, 'driveclaude-cwd-alias')
+    fs.symlinkSync(realCwd, aliasCwd, 'dir')
+    const idAliased = randomUUID()
+    seedTranscript(home, realCwd, idAliased)
+    const adoptedAliased = await requestOnce(socketPath, 'adopt', {
+      cwd: aliasCwd,
+      sessionId: idAliased,
+    })
+    assert.equal(adoptedAliased.sessionId, idAliased)
+    assert.equal(adoptedAliased.cwd, realCwd, 'session cwd must use the canonical physical path')
+
+    // 7. right session id, wrong directory -> refused, naming where it belongs.
     // Clear this exact live session first so the transcript-directory check is
     // reached instead of the already-controlled guard.
     await requestOnce(socketPath, 'end', { sessionId: idDotted })
@@ -170,6 +188,7 @@ async function main() {
     console.log('PASS: adopt supports multiple live sessions in one cwd')
     console.log('PASS: adopted sessions remain independently selectable by id')
     console.log('PASS: adopt resolves a cwd containing a dot')
+    console.log('PASS: adopt treats symlink aliases as the same physical cwd')
     console.log('PASS: adopt refuses a session that belongs to a different directory')
     console.log('all adopt regression tests passed')
   } finally {
