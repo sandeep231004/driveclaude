@@ -56,9 +56,9 @@ yourself.
 
 Loop:
 1. Plan the change and state your acceptance criteria.
-2. send({ cwd, message }) — brief Claude with the intent and constraints.
-3. read({ cwd, since }) repeatedly and narrate what Claude is doing.
-4. If it drifts, send() one short correction immediately.
+2. send({ cwd, message }) — brief Claude and keep the returned session ID.
+3. read({ sessionId, since }) repeatedly and narrate what Claude is doing.
+4. If it drifts, send({ sessionId, message }) one short correction immediately.
 5. When idle, diff({ cwd }) and review the actual work.
 6. Correct again or report what you verified.
 
@@ -86,15 +86,17 @@ verify the result.
 
 | MCP tool | Purpose |
 | --- | --- |
-| **send(cwd, message, model?, fresh?)** | Start, continue, or steer Claude |
-| **adopt(cwd, sessionId, model?)** | Take over a Claude conversation started outside driveclaude |
-| **read(cwd, since?)** | Read new text, tool calls, errors, and results |
-| **session(cwd)** | Inspect one live or remembered session |
+| **send(cwd?, message, sessionId?, model?, fresh?)** | Start, continue, or steer Claude |
+| **adopt(cwd, sessionId, model?)** | Resume an existing conversation under driveclaude |
+| **read(sessionId?, cwd?, since?)** | Read new text, tool calls, errors, and results |
+| **session(sessionId?, cwd?)** | Inspect one live or remembered session |
 | **sessions()** | List sessions across directories |
 | **diff(cwd, stat?, path?)** | Review tracked and untracked work |
-| **end(cwd)** | Stop the process while remembering the conversation |
+| **end(sessionId?, cwd?)** | Stop the process while remembering the conversation |
 
-MCP callers must provide an absolute **cwd**.
+The first **send** needs an absolute **cwd**. It returns a **sessionId**; Codex
+should keep using that ID for later sends and reads. A cwd remains a convenient
+selector while it has exactly one live session.
 
 ## Watch from another terminal
 
@@ -103,13 +105,43 @@ These commands observe or manage the sessions Codex is driving:
 ~~~bash
 driveclaude status      # daemon status and log location
 driveclaude sessions    # all live and remembered sessions
-driveclaude session     # session for the current directory
-driveclaude watch       # follow the current session
-driveclaude adopt <id>  # take over a session started outside driveclaude
-driveclaude diff        # inspect working-tree changes
-driveclaude end         # stop this live session
-driveclaude stop        # stop the daemon and all sessions
+driveclaude session <id> # status for one session
+driveclaude watch <id>   # live view of one session (ctrl-c to stop)
+driveclaude adopt <id>   # resume an existing conversation under driveclaude
+driveclaude diff         # inspect working-tree changes
+driveclaude end <id>     # stop one live session
+driveclaude stop         # stop the daemon and all sessions
 ~~~
+
+IDs may be full UUIDs or the unique eight-character prefixes printed by
+**driveclaude sessions**. If a project has only one live session, omitting the
+ID still selects it by the current directory.
+
+**watch** is the window into a session someone else is driving. It replays the
+conversation, then stays connected and streams each message, tool call, and
+turn as it happens, with a live status line showing state, turns, elapsed time
+and cost. Going idle is not the end — the supervisor can send again at any
+moment — so it keeps watching until you stop it.
+
+### Interactive, background, and driveclaude sessions
+
+A Claude **session ID identifies conversation history**. It is not an address
+for attaching to a running process.
+
+- A normal interactive Claude session belongs to the terminal that launched
+  it; that terminal owns its input and output.
+- A Claude background agent belongs to Claude Code's agent manager and can
+  appear in Claude's background-agent UI.
+- A driveclaude session runs through Claude's programmatic **-p stream-json**
+  mode. Driveclaude owns its input/output so Codex can send, read, and correct
+  it continuously.
+
+Because driveclaude's process is not a Claude-managed background agent, it does
+not appear as an attachable job in **claude agents**. Running
+**claude --resume &lt;id&gt;** does not attach to it: it starts another process with
+the same conversation history. That new Claude TUI therefore sits idle while
+Codex continues driving the original driveclaude process. Use
+**driveclaude watch &lt;id&gt;** for the live view.
 
 ## Hand over a session already in progress
 
@@ -118,13 +150,13 @@ carrying all of that context. Meanwhile the real thinking about where the work
 should go has been happening somewhere else: a long design discussion with
 Codex, which knows the constraints and has the better view of what to do next.
 
-**adopt** puts the two together. It hands the in-flight conversation to Codex
-so the side holding the ideas starts driving, without restarting the work or
-re-explaining it.
+**adopt** puts the two together. It preserves the conversation ID and history,
+then starts a new programmatic Claude process that Codex can drive. It adopts
+the conversation—not the original terminal process.
 
-1. Ask the running session for its ID with **/status**, then exit it. Leaving
-   it open to watch is fine; typing into it after handover is not, because two
-   processes writing one conversation can corrupt it.
+1. Ask the running session for its ID with **/status**, then exit it. Do not
+   resume a second copy after handover; **--resume** continues history in a new
+   process rather than attaching to driveclaude's live stream.
 2. Hand it over, from that directory:
 
    ~~~bash
@@ -137,25 +169,28 @@ From then on **send**, **read**, and **diff** behave exactly as they do for a
 session driveclaude started itself, with the conversation history intact.
 
 Adoption fails immediately, and changes nothing, if no transcript matches the
-session ID, if that session belongs to a different directory, or if driveclaude
-already has a live session for this one.
+session ID, if that session belongs to a different directory, or if that exact
+session is already controlled by driveclaude.
 
 ## Persistence
 
-- One live Claude process is bound to each directory.
+- Every process is identified by its Claude session ID; several may share one
+  directory.
 - The daemon survives Codex and terminal restarts.
 - **end** stops the process but remembers its session ID; the next Codex
   **send** resumes it.
-- **fresh: true** intentionally starts a new conversation.
-- **adopt** takes over a conversation started outside driveclaude and remembers
-  it like any other, replacing whatever that directory was pointing at.
+- **fresh: true** starts another conversation without killing existing sessions
+  in that directory.
+- **adopt** resumes a conversation started outside driveclaude in a new
+  driveclaude-controlled process and remembers it like any other.
 - Completed conversation history is resumable after a daemon restart.
 - In-flight work and unread steering messages are not durable.
 - Event cursors reset after restart; earlier JSONL logs remain on disk.
 
-To attach manually, first run **driveclaude end**, then use the resume command
-shown by **driveclaude session**. Never attach a second Claude process while
-driveclaude still has the session live.
+To return control to the native Claude TUI, first run **driveclaude end &lt;id&gt;**,
+then run **claude --resume &lt;full-session-id&gt;**. This is another handoff: it
+starts a new interactive process with the preserved history. It is not a live
+attachment to the stopped driveclaude process.
 
 ## Security and local data
 
@@ -228,18 +263,18 @@ npm test
 npm pack --dry-run
 ~~~
 
-Tests cover configuration trust, fresh sessions, mid-task steering, daemon
-restart, crash recovery, conversation resumption, and adopting an existing
-Claude conversation, using a scripted Claude stand-in.
+Tests cover configuration trust, multiple same-directory sessions, registry
+migration, fresh sessions, mid-task steering, daemon restart, crash recovery,
+conversation resumption, and adopting an existing Claude conversation, using a
+scripted Claude stand-in.
 
 ## Known limits
 
-- One session per directory; avoid path aliases to the same working tree.
+- A cwd-only command is rejected when multiple live sessions share that cwd;
+  pass the session ID so driveclaude never guesses.
 - Mid-task steering is best-effort and not durable across a process crash.
-- **adopt** does not detect or block a second writer on the same
-  conversation. If the original interactive session is still open, leave it
-  idle to watch — do not type into it once driveclaude has adopted it, or
-  the two processes can corrupt the shared transcript.
+- **adopt** cannot detect another writer on the same conversation. Exit the
+  original interactive process before adoption and watch through driveclaude.
 - **send** steers between Claude steps; it does not interrupt a running tool.
 - Persistent stream-json sessions do not create Claude dashboard agent jobs.
 

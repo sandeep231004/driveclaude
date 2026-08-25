@@ -41,26 +41,41 @@ function readJson(file, fallback) {
   }
 }
 
+const emptyRegistry = () => ({ version: 2, sessions: {}, defaults: {} })
+
 /**
- * Session ids are remembered per directory, so a daemon restart resumes the same
- * conversation instead of starting a stranger.
+ * Sessions are identified by Claude's session id, not by directory. Version 1
+ * stored one record at each cwd; normalize that shape on read so upgrades keep
+ * every existing remembered conversation without requiring a migration step.
  */
-export function readSessions() {
-  return readJson(SESSIONS_FILE, {})
+export function readSessionRegistry() {
+  const raw = readJson(SESSIONS_FILE, {})
+  if (raw?.version === 2 && raw.sessions && raw.defaults) return raw
+
+  const registry = emptyRegistry()
+  for (const [cwd, record] of Object.entries(raw || {})) {
+    if (!record?.sessionId) continue
+    registry.sessions[record.sessionId] = { ...record, cwd }
+    registry.defaults[cwd] = record.sessionId
+  }
+  return registry
 }
 
-export function rememberSession(cwd, record) {
+function writeSessionRegistry(registry) {
   ensureDirs()
-  const all = readSessions()
-  all[cwd] = { ...all[cwd], ...record, updatedAt: Date.now() }
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(all, null, 2))
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(registry, null, 2))
 }
 
-export function forgetSession(cwd) {
-  ensureDirs()
-  const all = readSessions()
-  delete all[cwd]
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(all, null, 2))
+export function rememberSession(cwd, record, { makeDefault = true } = {}) {
+  const registry = readSessionRegistry()
+  registry.sessions[record.sessionId] = {
+    ...registry.sessions[record.sessionId],
+    ...record,
+    cwd,
+    updatedAt: Date.now(),
+  }
+  if (makeDefault) registry.defaults[cwd] = record.sessionId
+  writeSessionRegistry(registry)
 }
 
 export const eventLogFile = (sessionId) => path.join(LOGS_DIR, `${sessionId}.jsonl`)

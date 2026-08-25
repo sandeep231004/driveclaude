@@ -6,83 +6,150 @@ import {
   PID_FILE,
   SOCKET,
   ensureDirs,
-  forgetSession,
-  readSessions,
+  readSessionRegistry,
   rememberSession,
   findTranscript,
   resolveCwd,
 } from './state.mjs'
 import { Session } from './session.mjs'
 
-/** cwd -> Session. The daemon outlives Codex, so these stay alive between runs. */
+/** session id -> Session. More than one session may work in the same directory. */
 const sessions = new Map()
 
 /** Set once the server is listening, so every exit path clears the same files. */
 let removeRuntimeFiles = () => {}
 
-function ensureSession(cwd, { model, fresh = false } = {}) {
-  const existing = sessions.get(cwd)
-  if (existing && existing.status !== 'exited') {
-    if (!fresh) return existing
-    // fresh must win even over a live session — end it and drop it so the
-    // code below builds a genuinely new one instead of handing this back.
-    existing.end()
-    sessions.delete(cwd)
+function liveMatchesForCwd(cwd) {
+  return [...sessions.values()].filter((s) => s.cwd === cwd && s.status !== 'exited')
+}
+
+function uniqueByPrefix(records, sessionId) {
+  const exact = records.find((record) => record.sessionId === sessionId)
+  if (exact) return exact
+  const matches = records.filter((record) => record.sessionId.startsWith(sessionId))
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) throw new Error(`session id prefix ${sessionId} is ambiguous`)
+  return null
+}
+
+function resolveLiveSession({ sessionId, cwd }, { includeExited = false } = {}) {
+  if (sessionId) {
+    const match = uniqueByPrefix(
+      [...sessions.values()].filter((s) => includeExited || s.status !== 'exited'),
+      sessionId,
+    )
+    if (match) return match
+    throw new Error(`no live session ${sessionId}`)
   }
 
-  if (fresh) forgetSession(cwd)
-  const remembered = fresh ? null : readSessions()[cwd]
+  if (!cwd) throw new Error('sessionId or cwd is required')
+  let matches = liveMatchesForCwd(cwd)
+  if (includeExited && matches.length === 0) {
+    matches = [...sessions.values()].filter((s) => s.cwd === cwd && s.status === 'exited')
+  }
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) {
+    const ids = matches.map((s) => s.sessionId.slice(0, 8)).join(', ')
+    throw new Error(`multiple live sessions for ${cwd} (${ids}) — specify a session id`)
+  }
+  throw new Error(`no live session for ${cwd} — send a message to start one`)
+}
+
+function ensureSession(cwd, { model, fresh = false, sessionId } = {}) {
+  if (sessionId) {
+    if (fresh) throw new Error('fresh and sessionId cannot be used together')
+    const live = uniqueByPrefix(
+      [...sessions.values()].filter((s) => s.status !== 'exited'),
+      sessionId,
+    )
+    if (live) return live
+
+    const remembered = uniqueByPrefix(Object.values(readSessionRegistry().sessions), sessionId)
+    if (!remembered) throw new Error(`no remembered session ${sessionId} — adopt it first`)
+    if (cwd && remembered.cwd !== cwd) {
+      throw new Error(`session ${sessionId} belongs to ${remembered.cwd}, not ${cwd}`)
+    }
+    sessionId = remembered.sessionId
+    cwd = remembered.cwd
+    model ||= remembered.model
+  }
+
+  if (!fresh && !sessionId) {
+    const live = liveMatchesForCwd(cwd)
+    if (live.length === 1) return live[0]
+    if (live.length > 1) {
+      const ids = live.map((s) => s.sessionId.slice(0, 8)).join(', ')
+      throw new Error(`multiple live sessions for ${cwd} (${ids}) — specify sessionId`)
+    }
+  }
+
+  const registry = readSessionRegistry()
+  const rememberedId = fresh ? null : sessionId || registry.defaults[cwd]
+  const remembered = rememberedId ? registry.sessions[rememberedId] : null
   const session = new Session({
     cwd,
     model: model || remembered?.model || DEFAULT_MODEL,
-    sessionId: remembered?.sessionId || null,
+    sessionId: rememberedId || null,
   }).start()
 
-  sessions.set(cwd, session)
+  sessions.set(session.sessionId, session)
   rememberSession(cwd, { sessionId: session.sessionId, model: session.model })
   return session
 }
 
-function requireSession(cwd) {
-  const s = sessions.get(cwd)
-  if (!s) throw new Error(`no live session for ${cwd} — send a message to start one`)
-  return s
-}
-
 const ops = {
-  ping: () => ({ pid: process.pid, sessions: sessions.size }),
+  ping: () => ({ pid: process.pid, sessions: [...sessions.values()].filter((s) => s.status !== 'exited').length }),
 
-  send: ({ cwd, message, model, fresh }) => {
-    const dir = resolveCwd(cwd)
+  send: ({ cwd, sessionId, message, model, fresh }) => {
+    const dir = cwd ? resolveCwd(cwd) : null
+    if (!dir && !sessionId) throw new Error('cwd is required when starting a session')
     if (!message || !message.trim()) throw new Error('message is required')
-    const session = ensureSession(dir, { model, fresh })
+    const session = ensureSession(dir, { model, fresh, sessionId })
     const { queued, cursor } = session.send(message)
     return { ...session.snapshot(), queued, cursorBefore: cursor }
   },
 
-  read: ({ cwd, since = 0 }) => {
-    const dir = resolveCwd(cwd)
-    const session = requireSession(dir)
+  read: ({ cwd, sessionId, since = 0 }) => {
+    const dir = cwd ? resolveCwd(cwd) : null
+    const session = resolveLiveSession({ sessionId, cwd: dir }, { includeExited: true })
     return { ...session.snapshot(), events: session.since(since) }
   },
 
-  info: ({ cwd }) => {
-    const dir = resolveCwd(cwd)
-    const session = sessions.get(dir)
-    return { cwd: dir, remembered: readSessions()[dir] || null, live: session?.snapshot() || null }
+  info: ({ cwd, sessionId }) => {
+    const dir = cwd ? resolveCwd(cwd) : null
+    const registry = readSessionRegistry()
+    if (sessionId) {
+      let live = null
+      try {
+        live = resolveLiveSession({ sessionId })
+      } catch {}
+      const remembered = uniqueByPrefix(Object.values(registry.sessions), live?.sessionId || sessionId)
+      if (!live && !remembered) throw new Error(`no session ${sessionId}`)
+      return { cwd: live?.cwd || remembered?.cwd || dir, remembered, live: live?.snapshot() || null }
+    }
+    const live = liveMatchesForCwd(dir)
+    if (live.length > 1) {
+      const ids = live.map((s) => s.sessionId.slice(0, 8)).join(', ')
+      throw new Error(`multiple live sessions for ${dir} (${ids}) — specify a session id`)
+    }
+    const rememberedId = registry.defaults[dir]
+    return {
+      cwd: dir,
+      remembered: rememberedId ? registry.sessions[rememberedId] || null : null,
+      live: live[0]?.snapshot() || null,
+    }
   },
 
   list: () => ({
-    sessions: [...sessions.values()].map((s) => s.snapshot()),
-    remembered: readSessions(),
+    sessions: [...sessions.values()].filter((s) => s.status !== 'exited').map((s) => s.snapshot()),
+    remembered: Object.values(readSessionRegistry().sessions),
   }),
 
   adopt: ({ cwd, sessionId, model }) => {
     const dir = resolveCwd(cwd)
     if (!sessionId || !sessionId.trim()) throw new Error('sessionId is required')
-    const existing = sessions.get(dir)
-    if (existing && existing.status !== 'exited') {
-      throw new Error(`a driveclaude-controlled session is already live for ${dir} — end it first`)
+    if (sessions.get(sessionId)?.status !== 'exited' && sessions.has(sessionId)) {
+      throw new Error(`session ${sessionId} is already controlled by driveclaude`)
     }
     const transcript = findTranscript(dir, sessionId)
     if (!transcript.found) {
@@ -94,18 +161,18 @@ const ops = {
       throw new Error(`session ${sessionId} belongs to ${transcript.cwd}, not ${dir}`)
     }
     const session = new Session({ cwd: dir, model: model || DEFAULT_MODEL, sessionId }).start()
-    sessions.set(dir, session)
+    sessions.set(session.sessionId, session)
     rememberSession(dir, { sessionId: session.sessionId, model: session.model })
     return session.snapshot()
   },
 
-  end: ({ cwd }) => {
-    const dir = resolveCwd(cwd)
-    const session = sessions.get(dir)
-    if (!session) return { cwd: dir, ended: false }
+  end: ({ cwd, sessionId }) => {
+    const dir = cwd ? resolveCwd(cwd) : null
+    if (!sessionId && liveMatchesForCwd(dir).length === 0) return { cwd: dir, ended: false }
+    const session = resolveLiveSession({ sessionId, cwd: dir })
     session.end()
-    sessions.delete(dir)
-    return { cwd: dir, ended: true, sessionId: session.sessionId }
+    sessions.delete(session.sessionId)
+    return { cwd: session.cwd, ended: true, sessionId: session.sessionId }
   },
 
   shutdown: () => {
