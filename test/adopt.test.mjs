@@ -7,14 +7,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// adopt() takes over a Claude conversation that was started outside
+// adopt() resumes a Claude conversation that was started outside
 // driveclaude (e.g. an interactive `claude` session run by hand). It must:
 //   - refuse a sessionId with no matching Claude transcript on disk, without
 //     writing anything to driveclaude's own state;
 //   - on a valid transcript, resume it and behave like any driveclaude
 //     session from then on (send/read work normally);
-//   - refuse when a live driveclaude session already exists for that cwd;
-//   - overwrite a remembered (non-live) session for that cwd.
+//   - coexist with other live sessions in the same cwd and remain individually
+//     addressable by session id.
 //
 // Runs a real daemon against a fake `claude` binary. `~/.claude/projects` is
 // where the real Claude CLI stores transcripts (`<cwd with / -> ->/<id>.jsonl`);
@@ -129,26 +129,20 @@ async function main() {
     }, 'adopted session never completed a turn after send')
     assert.equal(afterSend.sessionId, idA)
 
-    // 3. refuses while that cwd's adopted session is still live
+    // 3. a second conversation in the same cwd can be adopted independently
     const idB = randomUUID()
     seedTranscript(home, cwd, idB)
-    await assert.rejects(
-      adopt(idB),
-      /already live/,
-      'adopt must refuse a cwd that already has a live driveclaude session',
-    )
-
-    // 4. overwrites a remembered (non-live) session for that cwd
-    const ended = await requestOnce(socketPath, 'end', { cwd })
-    assert.equal(ended.sessionId, idA)
     const adoptedB = await adopt(idB)
-    assert.equal(adoptedB.sessionId, idB, 'adopt must succeed once the prior session is no longer live')
-    const infoAfterOverwrite = await requestOnce(socketPath, 'info', { cwd })
-    assert.equal(
-      infoAfterOverwrite.remembered.sessionId,
-      idB,
-      'adopt must overwrite the remembered session for that cwd',
+    assert.equal(adoptedB.sessionId, idB)
+    await assert.rejects(
+      requestOnce(socketPath, 'read', { cwd, since: 0 }),
+      /multiple live sessions/,
+      'cwd-only reads must not select an arbitrary same-directory session',
     )
+    const readA = await requestOnce(socketPath, 'read', { sessionId: idA, since: 0 })
+    const readB = await requestOnce(socketPath, 'read', { sessionId: idB, since: 0 })
+    assert.equal(readA.sessionId, idA)
+    assert.equal(readB.sessionId, idB)
 
     // 5. a cwd containing a dot still resolves. Regression: the transcript
     // lookup originally dashed out only '/', so every path with a '.' in it —
@@ -162,9 +156,9 @@ async function main() {
     assert.equal(adoptedDotted.sessionId, idDotted, 'a cwd containing a dot must still find its transcript')
 
     // 6. right session id, wrong directory -> refused, naming where it belongs.
-    // Clear the live session first so this exercises the transcript check
-    // rather than the already-live guard.
-    await requestOnce(socketPath, 'end', { cwd })
+    // Clear this exact live session first so the transcript-directory check is
+    // reached instead of the already-controlled guard.
+    await requestOnce(socketPath, 'end', { sessionId: idDotted })
     await assert.rejects(
       requestOnce(socketPath, 'adopt', { cwd, sessionId: idDotted }),
       new RegExp(`belongs to ${dottedCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
@@ -173,8 +167,8 @@ async function main() {
 
     console.log('PASS: adopt rejects a sessionId with no matching transcript, without side effects')
     console.log('PASS: adopt resumes a valid transcript and behaves like a normal session afterwards')
-    console.log('PASS: adopt refuses a cwd with an already-live driveclaude session')
-    console.log('PASS: adopt overwrites a remembered (non-live) session for that cwd')
+    console.log('PASS: adopt supports multiple live sessions in one cwd')
+    console.log('PASS: adopted sessions remain independently selectable by id')
     console.log('PASS: adopt resolves a cwd containing a dot')
     console.log('PASS: adopt refuses a session that belongs to a different directory')
     console.log('all adopt regression tests passed')

@@ -41,7 +41,6 @@ export function formatEvents(snap, { showHeader = true } = {}) {
         const cost = e.costUsd != null ? ` · $${e.costUsd.toFixed(4)}` : ''
         const dur = e.durationMs != null ? ` · ${secs(e.durationMs)}` : ''
         lines.push(`── turn ${e.isError ? 'failed' : 'complete'}${dur}${cost} ──`)
-        if (e.text) lines.push(clip(e.text, MAX_TEXT))
         break
       }
       case 'error':
@@ -92,7 +91,11 @@ export function formatInfo(info) {
     lines.push('the next send resumes this conversation')
   }
   const id = info.live?.sessionId || info.remembered?.sessionId
-  if (id) lines.push('', `attach by hand: claude --resume ${id}`)
+  if (info.live && id) lines.push('', `watch: driveclaude watch ${id.slice(0, 8)}`)
+  if (!info.live && id) {
+    lines.push('', `continue in Claude Code: claude --resume ${id}`)
+    lines.push('(starts a new interactive process; it is not a live attachment)')
+  }
   return lines.join('\n')
 }
 
@@ -108,10 +111,18 @@ export function formatList({ sessions, remembered }) {
   } else {
     lines.push('No live sessions.')
   }
-  const sleeping = Object.keys(remembered).filter((c) => !sessions.some((s) => s.cwd === c))
+  // A newly installed CLI can briefly talk to the previous daemon until the
+  // user restarts it. Accept the v1 cwd-keyed response as well as the v2 array
+  // so listing sessions remains useful during that upgrade window.
+  const rememberedRecords = Array.isArray(remembered)
+    ? remembered
+    : Object.entries(remembered || {}).map(([cwd, record]) => ({ ...record, cwd }))
+  const sleeping = rememberedRecords.filter(
+    (r) => !sessions.some((s) => s.sessionId === r.sessionId),
+  )
   if (sleeping.length) {
     lines.push('', 'Remembered (will resume on next send):')
-    for (const c of sleeping) lines.push(`  ${c}`)
+    for (const r of sleeping) lines.push(`  ${r.cwd}  (${r.sessionId.slice(0, 8)})`)
   }
   return lines.join('\n')
 }

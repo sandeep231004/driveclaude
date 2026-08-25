@@ -6,11 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Regression test for: `fresh` was ignored whenever a live session already
-// existed for the cwd, because ensureSession() returned the existing session
-// before ever checking the fresh flag. Runs a real daemon against a fake
-// `claude` binary (no network calls, no real Claude process) and drives it
-// over the same socket protocol the CLI uses.
+// A fresh send creates another independently addressable session. This is what
+// lets multiple supervisors work in one checkout without cwd collisions.
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI = path.join(ROOT, 'bin', 'driveclaude.mjs')
@@ -54,16 +51,27 @@ async function waitForSocket(socketPath) {
   throw new Error('daemon socket never appeared')
 }
 
+async function waitFor(predicate, message, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await sleep(25)
+  }
+  throw new Error(message)
+}
+
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-home-'))
   const cwdA = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-a-'))
   const cwdB = fs.mkdtempSync(path.join(os.tmpdir(), 'driveclaude-fresh-cwd-b-'))
   const socketPath = path.join(home, 'daemon.sock')
+  const env = { ...process.env, DRIVECLAUDE_HOME: home, DRIVECLAUDE_CLAUDE_BIN: FAKE_CLAUDE }
 
   const daemon = spawn(process.execPath, [CLI, 'daemon'], {
-    env: { ...process.env, DRIVECLAUDE_HOME: home, DRIVECLAUDE_CLAUDE_BIN: FAKE_CLAUDE },
+    env,
     stdio: 'ignore',
   })
+  let watcher
 
   try {
     await waitForSocket(socketPath)
@@ -78,19 +86,59 @@ async function main() {
     const a3 = await send(cwdA, 'start over', { fresh: true })
     assert.notEqual(a3.sessionId, a2.sessionId, 'fresh send must start a new session id even while the old one is live')
 
-    const info = await requestOnce(socketPath, 'info', { cwd: cwdA })
-    assert.equal(info.remembered?.sessionId, a3.sessionId, 'the remembered id must be forgotten and replaced, not left pointing at the old session')
+    const info = await requestOnce(socketPath, 'info', { sessionId: a3.sessionId })
+    assert.equal(info.remembered?.sessionId, a3.sessionId, 'the new session must be remembered by its own id')
+
+    const listed = await requestOnce(socketPath, 'list', {})
+    const sameCwd = listed.sessions.filter((session) => session.cwd === cwdA)
+    assert.equal(sameCwd.length, 2, 'both same-directory sessions must remain live')
+    await assert.rejects(
+      requestOnce(socketPath, 'read', { cwd: cwdA, since: 0 }),
+      /multiple live sessions/,
+      'cwd-only selection must refuse to guess between sessions',
+    )
+
+    const firstByShortId = await requestOnce(socketPath, 'read', {
+      sessionId: a1.sessionId.slice(0, 8),
+      since: 0,
+    })
+    assert.equal(firstByShortId.sessionId, a1.sessionId, 'short session ids must select the exact session')
+
+    watcher = spawn(process.execPath, [CLI, 'watch', a1.sessionId.slice(0, 8)], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let watchOutput = ''
+    watcher.stdout.on('data', (chunk) => {
+      watchOutput += chunk
+    })
+    watcher.stderr.on('data', (chunk) => {
+      watchOutput += chunk
+    })
+    await waitFor(
+      () => watchOutput.includes(a1.sessionId),
+      'ID-based CLI watch never rendered the selected session',
+    )
+    watcher.kill('SIGINT')
+    await waitFor(() => watcher.exitCode !== null, 'CLI watch did not stop after SIGINT')
+    assert(!watchOutput.includes(a3.sessionId), 'watch must not leak output from a sibling session')
+
+    await send(undefined, 'continue first', { sessionId: a1.sessionId })
+    await send(undefined, 'continue second', { sessionId: a3.sessionId })
 
     const b1 = await send(cwdB, 'hi b')
     const b2 = await send(cwdB, 'hi b again')
     assert.equal(b2.sessionId, b1.sessionId, "cwdA's fresh must not disturb an unrelated cwd's session")
 
     console.log('PASS: repeated normal send reuses the session id')
-    console.log('PASS: fresh send replaces a live session with a genuinely new id')
-    console.log('PASS: fresh forgets the remembered id for that cwd')
+    console.log('PASS: fresh starts a second live session without killing the first')
+    console.log('PASS: same-directory sessions require an explicit id')
+    console.log('PASS: full and short session ids target sessions independently')
+    console.log('PASS: CLI watch follows only the selected same-directory session')
     console.log('PASS: other cwd sessions are unaffected')
     console.log('all fresh-session regression tests passed')
   } finally {
+    if (watcher?.exitCode === null) watcher.kill('SIGKILL')
     daemon.kill('SIGTERM')
     await sleep(300)
     try {

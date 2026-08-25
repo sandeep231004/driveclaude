@@ -57,7 +57,7 @@ function speaker(dot, name, text, note = '') {
 const relative = (target, cwd) =>
   cwd && target.startsWith(`${cwd}/`) ? target.slice(cwd.length + 1) : target
 
-function renderEvent(e, cwd) {
+export function renderEvent(e, cwd) {
   switch (e.kind) {
     case 'you':
       return speaker(cyan('●'), cyan('supervisor'), e.text, e.queued ? dim('  queued mid-task') : '')
@@ -78,7 +78,7 @@ function renderEvent(e, cwd) {
       if (e.durationMs != null) bits.push(secs(e.durationMs))
       if (e.costUsd != null) bits.push(`$${e.costUsd.toFixed(4)}`)
       const mark = e.isError ? red('✗ turn failed') : green('✓ turn complete')
-      return ['', `  ${mark}${bits.length ? dim(`  ${bits.join(' · ')}`) : ''}`]
+      return ['', `  ${dim('└─')} ${mark}${bits.length ? dim(`  ${bits.join(' · ')}`) : ''}`]
     }
     case 'error':
       return ['', `${red('●')} ${red('error')}`, ...wrap(e.text, '  ').map((l) => `  ${red(l)}`)]
@@ -90,15 +90,25 @@ function renderEvent(e, cwd) {
 }
 
 /** Shown once when the view opens, so it is obvious what is being watched. */
-function header(snap) {
-  const id = snap.sessionId ? snap.sessionId.slice(0, 8) : '?'
+export function renderHeader(snap) {
+  const id = snap.sessionId || '?'
+  const rule = '─'.repeat(Math.max(20, Math.min(process.stdout.columns || 100, 72)))
   return [
-    bold('driveclaude') + dim(' · watching'),
-    dim(`${snap.cwd}  ${snap.model || ''}  session ${id}`),
+    `${bold('driveclaude')} ${dim('watch')}`,
+    `${cyan(id)} ${dim(`· ${snap.status} · ${snap.model || 'default model'}`)}`,
+    dim(snap.cwd),
+    dim(rule),
   ].join('\n')
 }
 
-export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
+export function renderSnapshot(snap, { showHeader = true } = {}) {
+  const lines = showHeader ? [renderHeader(snap)] : []
+  if (snap.dropped) lines.push(dim(`[${snap.dropped} older events dropped]`))
+  for (const event of snap.events || []) lines.push(...renderEvent(event, snap.cwd))
+  return lines.join('\n')
+}
+
+export async function watchSession(target, { since = 0, until = 'forever' } = {}) {
   let cursor = since
   let frame = 0
   let cost = 0
@@ -118,6 +128,7 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
     const spin = snap.status === 'working' ? `${SPINNER[frame % SPINNER.length]} ` : ''
     const bits = [
       snap.status === 'working' ? yellow(`${spin}working`) : dim(snap.status),
+      cyan(snap.sessionId.slice(0, 8)),
       `${snap.turns} turns`,
       secs(Date.now() - started),
     ]
@@ -143,7 +154,7 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
     for (;;) {
       let snap
       try {
-        snap = await request('read', { cwd, since: cursor })
+        snap = await request('read', { ...target, since: cursor })
       } catch (e) {
         clearStatus()
         // Failing on the very first poll means there was nothing to watch;
@@ -153,7 +164,7 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
       }
       if (!attached) {
         attached = true
-        process.stdout.write(`${header(snap)}\n`)
+        process.stdout.write(`${renderHeader(snap)}\n`)
       }
 
       if (snap.events.length) {
@@ -170,7 +181,7 @@ export async function watchSession(cwd, { since = 0, until = 'forever' } = {}) {
 
       // The session going idle is not the end of the story — whoever is driving
       // it can send again at any moment, so watching continues until interrupted.
-      if (until === 'idle' && snap.status !== 'working') {
+      if (until === 'idle' && ['idle', 'exited'].includes(snap.status)) {
         clearStatus()
         return snap
       }

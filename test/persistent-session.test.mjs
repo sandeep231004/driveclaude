@@ -67,9 +67,9 @@ async function stopDaemon(daemon) {
   })
 }
 
-async function waitForTurns(socketPath, cwd, turns) {
+async function waitForTurns(socketPath, sessionId, turns) {
   return waitFor(async () => {
-    const snapshot = await request(socketPath, 'read', { cwd, since: 0 })
+    const snapshot = await request(socketPath, 'read', { sessionId, since: 0 })
     return snapshot.turns >= turns ? snapshot : null
   }, `session never completed ${turns} turn(s)`)
 }
@@ -88,7 +88,7 @@ async function main() {
     assert.equal(second.sessionId, first.sessionId, 'normal sends must reuse the live session')
     assert.equal(second.queued, true, 'a mid-turn send must be reported as queued')
 
-    const afterOne = await waitForTurns(daemon.socketPath, cwd, 1)
+    const afterOne = await waitForTurns(daemon.socketPath, first.sessionId, 1)
     assert.equal(afterOne.status, 'idle', 'one result acknowledges in-flight steering messages')
     assert.equal(afterOne.queued, 0, 'a result must clear all accepted in-flight messages')
     assert(afterOne.events.some((event) => event.kind === 'tool' && event.name === 'Read'))
@@ -97,8 +97,8 @@ async function main() {
 
     const cursor = afterOne.cursor
     await request(daemon.socketPath, 'send', { cwd, message: 'third' })
-    const afterThree = await waitForTurns(daemon.socketPath, cwd, 2)
-    const incremental = await request(daemon.socketPath, 'read', { cwd, since: cursor })
+    const afterThree = await waitForTurns(daemon.socketPath, first.sessionId, 2)
+    const incremental = await request(daemon.socketPath, 'read', { sessionId: first.sessionId, since: cursor })
     assert(incremental.events.length > 0, 'cursor reads must return new events')
     assert(incremental.events.every((event) => event.seq > cursor))
     assert.equal(afterThree.sessionId, first.sessionId)
@@ -112,27 +112,27 @@ async function main() {
     const resumedAfterEnd = await request(daemon.socketPath, 'send', { cwd, message: 'after end' })
     assert.equal(resumedAfterEnd.sessionId, first.sessionId)
     assert.equal(resumedAfterEnd.resumed, true)
-    await waitForTurns(daemon.socketPath, cwd, 1)
+    await waitForTurns(daemon.socketPath, first.sessionId, 1)
 
     await stopDaemon(daemon)
     daemon = await startDaemon(home)
     const resumedAfterRestart = await request(daemon.socketPath, 'send', { cwd, message: 'after restart' })
     assert.equal(resumedAfterRestart.sessionId, first.sessionId, 'daemon restart must resume remembered id')
     assert.equal(resumedAfterRestart.resumed, true)
-    await waitForTurns(daemon.socketPath, cwd, 1)
+    await waitForTurns(daemon.socketPath, first.sessionId, 1)
 
     await request(daemon.socketPath, 'send', { cwd, message: 'CRASH_NOW' })
     await waitFor(async () => {
-      const snapshot = await request(daemon.socketPath, 'read', { cwd, since: 0 })
+      const snapshot = await request(daemon.socketPath, 'read', { sessionId: first.sessionId, since: 0 })
       return snapshot.status === 'exited' ? snapshot : null
     }, 'fake Claude never crashed')
     const resumedAfterCrash = await request(daemon.socketPath, 'send', { cwd, message: 'after crash' })
     assert.equal(resumedAfterCrash.sessionId, first.sessionId, 'crash recovery must resume the same id')
     assert.equal(resumedAfterCrash.resumed, true)
-    await waitForTurns(daemon.socketPath, cwd, 1)
+    await waitForTurns(daemon.socketPath, first.sessionId, 1)
 
     const fresh = await request(daemon.socketPath, 'send', { cwd, message: 'intentional reset', fresh: true })
-    assert.notEqual(fresh.sessionId, first.sessionId, 'fresh alone must replace the conversation id')
+    assert.notEqual(fresh.sessionId, first.sessionId, 'fresh must create a new conversation id')
 
     console.log('PASS: persistent stream-json lifecycle, queueing, restart, crash recovery, and fresh reset')
   } finally {

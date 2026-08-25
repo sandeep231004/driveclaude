@@ -28,10 +28,18 @@ export function createServer() {
         'up between steps without stopping or losing context. That is how you steer work in flight ' +
         '("actually, use the existing retry helper instead").\n\n' +
         'The session is persistent, so keep messages short and conversational — Claude remembers everything ' +
-        'said before. After sending, use read() to watch what happens.\n\n' +
+        'said before. Keep the returned session ID and pass it to later send/read calls; cwd alone is ambiguous ' +
+        'when multiple sessions share a project. After sending, use read() to watch what happens.\n\n' +
         'Keep only one unanswered message in flight at a time; queue depth is best-effort and not durable.',
       inputSchema: {
-        cwd: z.string().describe('Absolute path to the directory the session works in.'),
+        cwd: z
+          .string()
+          .optional()
+          .describe('Directory for a new session. Optional when sessionId selects an existing session.'),
+        sessionId: z
+          .string()
+          .optional()
+          .describe('Existing session to continue. Required when multiple live sessions share the cwd.'),
         message: z.string().describe('What to say to Claude.'),
         model: z
           .string()
@@ -40,17 +48,17 @@ export function createServer() {
         fresh: z
           .boolean()
           .optional()
-          .describe('Abandon the existing conversation and start a brand-new session.'),
+          .describe('Start a brand-new session alongside any existing sessions in this directory.'),
       },
     },
-    async ({ cwd, message, model, fresh }) => {
+    async ({ cwd, sessionId, message, model, fresh }) => {
       try {
-        const snap = await request('send', { cwd, message, model, fresh })
+        const snap = await request('send', { cwd, sessionId, message, model, fresh })
         const note = snap.queued
           ? 'Queued while Claude was mid-task — it will pick this up between steps.'
           : 'Delivered; Claude is starting on it.'
         return text(
-          `${note}\nsession ${snap.sessionId} · ${snap.status}\nRead from cursor ${snap.cursorBefore} to watch.`,
+          `${note}\nsession ${snap.sessionId} · ${snap.status}\nRead with sessionId=${snap.sessionId} and since=${snap.cursorBefore} to watch.`,
         )
       } catch (e) {
         return fail(e)
@@ -63,16 +71,18 @@ export function createServer() {
     {
       title: 'Adopt an existing Claude conversation',
       description:
-        'Takes over a Claude conversation that was started outside driveclaude — for example an interactive ' +
-        '`claude` session someone was running by hand, already partway through work. After adopting, send/read/' +
+        'Resumes a Claude conversation that was started outside driveclaude — for example an interactive ' +
+        '`claude` session someone was running by hand, already partway through work. The original process must ' +
+        'be exited first. Adoption preserves the session ID and history but starts a new `claude -p` process; ' +
+        'it does not attach to the original terminal. After adopting, send/read/' +
         'session/diff control it exactly like any driveclaude-created session, and the conversation history is ' +
         'preserved.\n\n' +
         'Requires the session ID of that conversation (from `/status` inside it, or the terminal) and the exact ' +
         'directory it was running in. Fails immediately, without side effects, if no matching Claude transcript ' +
         'exists for that ID and directory.\n\n' +
-        'The original terminal can stay open to watch, but do not type into it after adopting — two processes ' +
-        'writing to the same conversation at once can corrupt it. Refuses if driveclaude already has a live ' +
-        'session for this directory; end that one first.',
+        'Do not run `claude --resume` on the same ID while driveclaude controls it: resume starts a second process, ' +
+        'not a live viewer. Multiple driveclaude sessions may work in the same directory; use the returned ' +
+        'session ID for later calls.',
       inputSchema: {
         cwd: z.string().describe('Absolute path to the directory the existing session was running in.'),
         sessionId: z.string().describe('The session ID of the existing Claude conversation to adopt.'),
@@ -82,7 +92,7 @@ export function createServer() {
     async ({ cwd, sessionId, model }) => {
       try {
         const snap = await request('adopt', { cwd, sessionId, model })
-        return text(`Adopted; Claude is running.\nsession ${snap.sessionId} · ${snap.status}\nRead from cursor 0 to watch.`)
+        return text(`Adopted; Claude is running.\nsession ${snap.sessionId} · ${snap.status}\nRead with sessionId=${snap.sessionId} and since=0 to watch.`)
       } catch (e) {
         return fail(e)
       }
@@ -99,7 +109,8 @@ export function createServer() {
         'Start with since=0 to see the whole session. Poll this while Claude is working, and tell the user what ' +
         'you see. If Claude is heading the wrong way, send() a correction immediately rather than waiting.',
       inputSchema: {
-        cwd: z.string(),
+        cwd: z.string().optional().describe('Directory selector; only unambiguous with one live session.'),
+        sessionId: z.string().optional().describe('Preferred selector for the exact session to read.'),
         since: z
           .number()
           .int()
@@ -108,9 +119,9 @@ export function createServer() {
           .describe('Cursor from the previous read. Omit or 0 for the full session.'),
       },
     },
-    async ({ cwd, since }) => {
+    async ({ cwd, sessionId, since }) => {
       try {
-        return text(formatEvents(await request('read', { cwd, since: since || 0 })))
+        return text(formatEvents(await request('read', { cwd, sessionId, since: since || 0 })))
       } catch (e) {
         return fail(e)
       }
@@ -124,11 +135,14 @@ export function createServer() {
       description:
         'Whether a live session exists for a directory, its id, how long it has been alive, and what it has ' +
         'written. Sessions survive you restarting — a remembered session resumes on the next send().',
-      inputSchema: { cwd: z.string() },
+      inputSchema: {
+        cwd: z.string().optional(),
+        sessionId: z.string().optional().describe('Preferred selector for the exact session.'),
+      },
     },
-    async ({ cwd }) => {
+    async ({ cwd, sessionId }) => {
       try {
-        return text(formatInfo(await request('info', { cwd })))
+        return text(formatInfo(await request('info', { cwd, sessionId })))
       } catch (e) {
         return fail(e)
       }
@@ -158,11 +172,14 @@ export function createServer() {
       description:
         'Shut the live Claude process down cleanly. Files it wrote stay on disk, and the conversation is ' +
         'remembered — the next send() resumes it. Use this to stop a session that has gone badly wrong.',
-      inputSchema: { cwd: z.string() },
+      inputSchema: {
+        cwd: z.string().optional(),
+        sessionId: z.string().optional().describe('Preferred selector for the exact session to close.'),
+      },
     },
-    async ({ cwd }) => {
+    async ({ cwd, sessionId }) => {
       try {
-        const r = await request('end', { cwd })
+        const r = await request('end', { cwd, sessionId })
         return text(r.ended ? `session ended for ${r.cwd}` : `no live session for ${r.cwd}`)
       } catch (e) {
         return fail(e)
